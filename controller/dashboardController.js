@@ -13,6 +13,9 @@ const Request = require("../models/request");
 const Staff = require("../models/staff");
 const Department = require("../models/department");
 const SubadminActivity = require("../models/subadminActivity");
+const ReminderLog = require("../models/reminderLog");
+const { getReminderSchedulerStatus, runReminderJob, updateReminderSettings } = require("../utils/reminderJob");
+const { buildTicketSubject, renderEmailLayout, sendMail } = require("../utils/mailer");
 
 /* ========================= HELPERS ========================= */
 
@@ -758,6 +761,169 @@ exports.userSummary = async (req, res) => {
         return res.status(e.statusCode || 500).json({
             success: false,
             message: e.message || "Error",
+        });
+    }
+};
+
+exports.runReminderCheck = async (req, res) => {
+    try {
+        const staff = await getCurrentStaff(req);
+        if (roleLower(staff) !== "superadmin") {
+            return res.status(403).json({ success: false, message: "Forbidden" });
+        }
+
+        const summary = await runReminderJob();
+        return res.json({ success: true, data: summary });
+    } catch (e) {
+        return res.status(e.statusCode || 500).json({
+            success: false,
+            message: e.message || "Failed to run reminder check",
+        });
+    }
+};
+
+exports.getReminderStatus = async (req, res) => {
+    try {
+        const staff = await getCurrentStaff(req);
+        if (roleLower(staff) !== "superadmin") {
+            return res.status(403).json({ success: false, message: "Forbidden" });
+        }
+
+        return res.json({ success: true, data: await getReminderSchedulerStatus() });
+    } catch (e) {
+        return res.status(e.statusCode || 500).json({
+            success: false,
+            message: e.message || "Failed to load reminder scheduler status",
+        });
+    }
+};
+
+exports.updateReminderStatus = async (req, res) => {
+    try {
+        const staff = await getCurrentStaff(req);
+        if (roleLower(staff) !== "superadmin") {
+            return res.status(403).json({ success: false, message: "Forbidden" });
+        }
+
+        const settings = await updateReminderSettings({
+            enabled: req.body.enabled,
+            runTime: req.body.runTime,
+            thresholdDays: req.body.thresholdDays,
+        });
+
+        return res.json({
+            success: true,
+            data: {
+                ...(await getReminderSchedulerStatus()),
+                ...settings,
+            },
+        });
+    } catch (e) {
+        return res.status(e.statusCode || 500).json({
+            success: false,
+            message: e.message || "Failed to update reminder scheduler settings",
+        });
+    }
+};
+
+exports.getReminderLogs = async (req, res) => {
+    try {
+        const staff = await getCurrentStaff(req);
+        if (roleLower(staff) !== "superadmin") {
+            return res.status(403).json({ success: false, message: "Forbidden" });
+        }
+
+        const limit = Math.min(toInt(req.query.limit) || 50, 200);
+        const where = {};
+
+        if (req.query.status) {
+            where.status = String(req.query.status).trim();
+        }
+        if (req.query.ticketType) {
+            where.ticketType = String(req.query.ticketType).trim().toLowerCase();
+        }
+        if (req.query.from || req.query.to) {
+            const from = req.query.from ? new Date(req.query.from) : null;
+            const to = req.query.to ? new Date(req.query.to) : null;
+            where.createdAt = {};
+            if (from && !Number.isNaN(from.getTime())) {
+                from.setHours(0, 0, 0, 0);
+                where.createdAt[Op.gte] = from;
+            }
+            if (to && !Number.isNaN(to.getTime())) {
+                to.setHours(23, 59, 59, 999);
+                where.createdAt[Op.lte] = to;
+            }
+            if (Object.keys(where.createdAt).length === 0) delete where.createdAt;
+        }
+        if (req.query.search) {
+            const search = `%${String(req.query.search).trim()}%`;
+            where[Op.or] = [
+                { ticketId: { [Op.iLike]: search } },
+                { recipientEmail: { [Op.iLike]: search } },
+                { reminderType: { [Op.iLike]: search } },
+            ];
+        }
+
+        const logs = await ReminderLog.findAll({
+            where,
+            order: [["createdAt", "DESC"]],
+            limit,
+        });
+
+        return res.json({ success: true, data: logs });
+    } catch (e) {
+        return res.status(e.statusCode || 500).json({
+            success: false,
+            message: e.message || "Failed to load reminder logs",
+        });
+    }
+};
+
+exports.sendReminderTestEmail = async (req, res) => {
+    try {
+        const staff = await getCurrentStaff(req);
+        if (roleLower(staff) !== "superadmin") {
+            return res.status(403).json({ success: false, message: "Forbidden" });
+        }
+
+        const email = String(staff.email || "").trim();
+        if (!email) {
+            return res.status(400).json({ success: false, message: "Superadmin email is missing" });
+        }
+
+        const result = await sendMail({
+            to: email,
+            subject: buildTicketSubject("TEST", "Reminder email test"),
+            html: renderEmailLayout({
+                title: "Reminder Email Test",
+                intro: "This is a test email from MET Helpdesk reminder settings.",
+                rows: [
+                    { label: "Sent To", value: email },
+                    { label: "Purpose", value: "Verify reminder email configuration" },
+                    { label: "Result", value: "Email service accepted this test message" },
+                ],
+                outro: "No ticket data was changed for this test.",
+            }),
+        });
+
+        if (result?.skipped) {
+            return res.json({
+                success: true,
+                data: { skipped: true, reason: result.reason },
+                message: "Email is disabled, so test email was skipped.",
+            });
+        }
+
+        return res.json({
+            success: true,
+            data: { sent: true, to: email },
+            message: "Test reminder email sent.",
+        });
+    } catch (e) {
+        return res.status(e.statusCode || 500).json({
+            success: false,
+            message: e.message || "Failed to send test reminder email",
         });
     }
 };

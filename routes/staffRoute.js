@@ -15,6 +15,8 @@ const {
 
   // ✅ NEW: admin scoped role change
   updateStaffRoleScoped,
+  updateStaffPermissions,
+  updateStaffContactExtension,
 } = require('../controller/staffController');
 
 const { verifyToken, allowRoles } = require('../middleware/authMiddleware');
@@ -25,6 +27,8 @@ const router = express.Router();
 // ====================== ACTIVE STAFF ======================
 router.post('/createstaff', verifyToken, allowRoles('superadmin'), createStaff);
 router.get('/', verifyToken, getStaff);
+router.patch('/permissions/:id', verifyToken, allowRoles('superadmin'), updateStaffPermissions);
+router.patch('/:id/contact-extension', verifyToken, updateStaffContactExtension);
 
 // ✅ Admin + Superadmin can change role (admin only for own dept)
 router.patch('/role/:id', verifyToken, activeDepartment, allowRoles('admin', 'superadmin'), updateStaffRoleScoped);

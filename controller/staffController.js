@@ -5,7 +5,7 @@ const bcrypt = require('bcryptjs');
 
 const Staff = require('../models/staff');
 const ArchiveStaff = require('../models/archiveStaff');
-const { emailEnabled, sendMail } = require('../utils/mailer');
+const { emailEnabled, renderEmailLayout, sendMail } = require('../utils/mailer');
 
 const ALLOWED_ROLES = ['superadmin', 'admin', 'subadmin', 'engineer', 'user'];
 
@@ -31,11 +31,16 @@ const toIntOrNull = (v) => {
   return Number.isInteger(n) ? n : null;
 };
 
+const toBool = (value) => value === true || value === 'true' || value === 1 || value === '1';
+
 const scrub = (s) => {
   if (!s) return s;
   const { password, ...safe } = s.get ? s.get({ plain: true }) : s;
   return safe;
 };
+
+const isSuperadmin = (user) => String(user?.role || '').toLowerCase() === 'superadmin';
+const canManageExtensions = (user) => isSuperadmin(user) || Boolean(user?.canManageExtensions);
 
 // ------------------------- mail (PEHLE JAISA: hardcoded) -------------------------
 if (!emailEnabled) {
@@ -141,6 +146,8 @@ exports.createStaff = async (req, res) => {
       employeeType: String(employeeType).trim(),
       phoneNumber: phoneNumber ?? null,
       contactExtension: contactExtension ?? null,
+      canManageExtensions: toBool(body.canManageExtensions),
+      canManagePolicies: toBool(body.canManagePolicies),
       isNew: finalIsNew
     });
 
@@ -148,18 +155,17 @@ exports.createStaff = async (req, res) => {
     try {
       await transporter.sendMail({
         to: created.email,
-        subject: 'Your Account Has Been Created',
-        html: `
-          <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-            <h2>Welcome, ${created.firstname}</h2>
-            <p>Your account has been created successfully.</p>
-            <p><b>Email:</b> ${created.email}</p>
-            <p><b>Temporary Password:</b> ${finalPassword}</p>
-            <p>Please login and change your password.</p>
-            <br/>
-            <p>Regards,<br/>ERP Helpdesk Team</p>
-          </div>
-        `,
+        subject: 'Welcome to MET Helpdesk',
+        html: renderEmailLayout({
+          title: `Welcome, ${created.firstname}`,
+          intro: 'Your MET Helpdesk account has been created successfully.',
+          rows: [
+            { label: 'Email', value: created.email },
+            { label: 'Temporary Password', value: finalPassword },
+            { label: 'Role', value: created.role },
+          ],
+          outro: 'Please log in and change your password after your first sign-in.',
+        }),
         text: `Welcome ${created.firstname}
               Email: ${created.email}
               Temporary Password: ${finalPassword}
@@ -319,6 +325,14 @@ exports.updateStaff = async (req, res) => {
       item.contactExtension = body.contactExtension === '' ? null : String(body.contactExtension);
     }
 
+    if (body.canManageExtensions !== undefined) {
+      item.canManageExtensions = toBool(body.canManageExtensions);
+    }
+
+    if (body.canManagePolicies !== undefined) {
+      item.canManagePolicies = toBool(body.canManagePolicies);
+    }
+
     if (body.isNew !== undefined) item.isNew = Boolean(body.isNew);
 
     await item.save();
@@ -326,6 +340,82 @@ exports.updateStaff = async (req, res) => {
     return res.json({ message: 'Staff updated', data: scrub(item) });
   } catch (err) {
     return res.status(500).json({ message: 'Update failed', error: err.message });
+  }
+};
+
+exports.updateStaffPermissions = async (req, res) => {
+  try {
+    if (!isSuperadmin(req.user)) {
+      return res.status(403).json({ message: 'Only superadmin can update staff permissions' });
+    }
+
+    const { id } = req.params;
+    const target = await Staff.findByPk(id);
+    if (!target) return res.status(404).json({ message: 'Staff not found' });
+
+    if (req.body.canManageExtensions === undefined &&
+        req.body.canUpdateExtensions === undefined &&
+        req.body.canManagePolicies === undefined &&
+        req.body.canUploadPolicies === undefined) {
+      return res.status(400).json({
+        message: 'Provide canManageExtensions/canUpdateExtensions and/or canManagePolicies/canUploadPolicies',
+      });
+    }
+
+    const canManageExtensionsValue =
+      req.body.canManageExtensions !== undefined
+        ? toBool(req.body.canManageExtensions)
+        : req.body.canUpdateExtensions !== undefined
+          ? toBool(req.body.canUpdateExtensions)
+          : target.canManageExtensions;
+
+    const canManagePoliciesValue =
+      req.body.canManagePolicies !== undefined
+        ? toBool(req.body.canManagePolicies)
+        : req.body.canUploadPolicies !== undefined
+          ? toBool(req.body.canUploadPolicies)
+          : target.canManagePolicies;
+
+    target.canManageExtensions = canManageExtensionsValue;
+    target.canManagePolicies = canManagePoliciesValue;
+    await target.save();
+
+    return res.json({
+      message: 'Staff permissions updated successfully',
+      data: scrub(target),
+    });
+  } catch (err) {
+    return res.status(500).json({ message: 'Permission update failed', error: err.message });
+  }
+};
+
+exports.updateStaffContactExtension = async (req, res) => {
+  try {
+    if (!canManageExtensions(req.user)) {
+      return res.status(403).json({ message: 'You are not allowed to update employee extension numbers' });
+    }
+
+    const { id } = req.params;
+    const { contactExtension } = req.body;
+
+    if (contactExtension === undefined) {
+      return res.status(400).json({ message: 'contactExtension is required' });
+    }
+
+    const target = await Staff.findByPk(id);
+    if (!target) return res.status(404).json({ message: 'Staff not found' });
+
+    target.contactExtension = contactExtension === '' || contactExtension === null
+      ? null
+      : String(contactExtension).trim();
+    await target.save();
+
+    return res.json({
+      message: 'Contact extension updated successfully',
+      data: scrub(target),
+    });
+  } catch (err) {
+    return res.status(500).json({ message: 'Extension update failed', error: err.message });
   }
 };
 
@@ -438,6 +528,8 @@ exports.deleteStaff = async (req, res) => {
       employeeType: fullItem.employeeType,
       phoneNumber: fullItem.phoneNumber,
       contactExtension: fullItem.contactExtension,
+      canManageExtensions: fullItem.canManageExtensions,
+      canManagePolicies: fullItem.canManagePolicies,
       isNew: fullItem.isNew
     });
 
@@ -507,29 +599,10 @@ exports.recoverStaff = async (req, res) => {
       employeeType: archivedItem.employeeType,
       phoneNumber: archivedItem.phoneNumber,
       contactExtension: archivedItem.contactExtension,
+      canManageExtensions: archivedItem.canManageExtensions,
+      canManagePolicies: archivedItem.canManagePolicies,
       isNew: archivedItem.isNew
     });
-
-    transporter.sendMail({
-      to: recovered.email,
-      subject: 'Your Account Has Been Recovered',
-      html: `
-        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2>Account Recovery Notice</h2>
-          <p>Your account has been recovered and is now active again.</p>
-          <p><b>Email:</b> ${recovered.email}</p>
-          <p>Please log in with your existing credentials.</p>
-          <br/>
-          <p>Regards,<br/>ERP Helpdesk Team</p>
-        </div>
-      `,
-       text: `Account Recovery Notice 
-              Your account has been recovered and is now active again.
-              Email: ${recovered.email}
-              Please log in with your existing credentials.
-              ERP Helpdesk Team`
-    });
-
 
     await archivedItem.destroy();
 
@@ -537,17 +610,16 @@ exports.recoverStaff = async (req, res) => {
     try {
       await transporter.sendMail({
         to: recovered.email,
-        subject: 'Your Account Has Been Recovered',
-        html: `
-          <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-            <h2>Account Recovery Notice</h2>
-            <p>Your account has been recovered and is now active again.</p>
-            <p><b>Email:</b> ${recovered.email}</p>
-            <p>Please log in with your existing credentials.</p>
-            <br/>
-            <p>Regards,<br/>Helpdesk Team</p>
-          </div>
-        `,
+        subject: 'Your MET Helpdesk Account Has Been Recovered',
+        html: renderEmailLayout({
+          title: 'Account Recovery Notice',
+          intro: 'Your account has been recovered and is active again.',
+          rows: [
+            { label: 'Email', value: recovered.email },
+            { label: 'Role', value: recovered.role },
+          ],
+          outro: 'Please log in with your existing credentials.',
+        }),
         text: `Account Recovery Notice
 Your account has been recovered and is now active again.
 Email: ${recovered.email}

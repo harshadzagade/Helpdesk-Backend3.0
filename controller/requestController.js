@@ -8,7 +8,7 @@ const sequelize = require("../config/db");
 const { Op } = require("sequelize");
 const fs = require("fs");
 const path = require("path");
-const { buildTicketSubject, sendMail } = require("../utils/mailer");
+const { buildTicketSubject, renderEmailLayout, sendMail } = require("../utils/mailer");
 const { buildTicketId } = require("../utils/ticketId");
 
 /* ========================= HELPERS ========================= */
@@ -98,13 +98,26 @@ const requestAccessWhere = (staff) => {
   return { [Op.or]: ownScope };
 };
 
-const canViewRequest = (staff, request) => {
+const canViewRequest = async (staff, request) => {
   if (roleLower(staff) === "superadmin") return true;
   if (request.staffId === staff.id || request.assignStaffId === staff.id || request.behalfId === staff.id) {
     return true;
   }
 
-  return ["admin", "subadmin", "engineer"].includes(roleLower(staff)) && hasDeptAccess(staff, request.departmentId);
+  if (!["admin", "subadmin", "engineer"].includes(roleLower(staff))) {
+    return false;
+  }
+
+  if (hasDeptAccess(staff, request.departmentId)) {
+    return true;
+  }
+
+  const requester = await Staff.findByPk(request.staffId, {
+    attributes: ["departmentIds"],
+  });
+
+  const requesterDeptIds = deptIdsOf(requester);
+  return requesterDeptIds.some((deptId) => hasDeptAccess(staff, deptId));
 };
 
 /* ========================= MAIL ========================= */
@@ -305,37 +318,23 @@ exports.createRequest = async (req, res) => {
           const hodName = getStaffFullName(hod);
           const emailSubject = ticketSubject;
 
-          const emailHtml = `
-<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"></head>
-<body style="font-family: Arial, sans-serif; background:#f4f4f4; margin:0; padding:0;">
-  <div style="max-width:600px;margin:0 auto;padding:20px;background:#fff;border-radius:6px;">
-    <div style="background:#DA251C;color:#fff;text-align:center;padding:16px;border-radius:6px 6px 0 0;">
-      <h2 style="margin:0;">MET Helpdesk</h2>
-    </div>
-    <div style="padding:16px;">
-      <p>Dear ${hodName},</p>
-      <p>A new <strong>Request</strong> ticket has been generated and requires your <strong>HOD1 approval</strong>.</p>
-      <table style="width:100%;border-collapse:collapse;">
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Ticket ID</b></td><td style="border:1px solid #ddd;padding:8px;">${ticketId}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Target Department</b></td><td style="border:1px solid #ddd;padding:8px;">${targetDeptName}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Category</b></td><td style="border:1px solid #ddd;padding:8px;">${departmentCategory || "N/A"}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Priority</b></td><td style="border:1px solid #ddd;padding:8px;">${priority || "N/A"}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Status</b></td><td style="border:1px solid #ddd;padding:8px;">${status}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Subject</b></td><td style="border:1px solid #ddd;padding:8px;">${subject}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Description</b></td><td style="border:1px solid #ddd;padding:8px;">${description}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Location</b></td><td style="border:1px solid #ddd;padding:8px;">${location || "N/A"}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Raised by</b></td><td style="border:1px solid #ddd;padding:8px;">${staffName}${behalfBool ? ` (on behalf of ${behalfUserName})` : ""}</td></tr>
-        ${isRepeatedBool ? `<tr><td style="border:1px solid #ddd;padding:8px;"><b>Repeated</b></td><td style="border:1px solid #ddd;padding:8px;">Yes</td></tr>` : ""}
-      </table>
-      <p style="margin-top:16px;">Please log in to the helpdesk system to review and take necessary action.</p>
-      <p>Best regards,<br><b>The Helpdesk Team</b></p>
-    </div>
-    <div style="text-align:center;color:#666;font-size:12px;padding:10px;background:#f4f4f4;border-radius:0 0 6px 6px;">
-      This is an automated email. Please do not reply.
-    </div>
-  </div>
-</body></html>`;
+          const emailHtml = renderEmailLayout({
+            title: "HOD1 Approval Required",
+            intro: `Dear ${hodName}, a new request ticket has been generated and needs your HOD1 approval.`,
+            rows: [
+              { label: "Ticket ID", value: ticketId },
+              { label: "Target Department", value: targetDeptName },
+              { label: "Category", value: departmentCategory || "N/A" },
+              { label: "Priority", value: priority || "N/A" },
+              { label: "Status", value: status },
+              { label: "Subject", value: subject },
+              { label: "Description", value: description },
+              { label: "Location", value: location || "N/A" },
+              { label: "Raised By", value: `${staffName}${behalfBool ? ` (on behalf of ${behalfUserName})` : ""}` },
+              { label: "Repeated", value: isRepeatedBool ? "Yes" : null },
+            ],
+            outro: "Please log in to MET Helpdesk to review and take the next action.",
+          });
 
           return sendEmail(hod.email, emailSubject, emailHtml).catch((err) => {
             console.error(`Failed to send HOD1 mail to ${hod.email}`, err);
@@ -347,23 +346,17 @@ exports.createRequest = async (req, res) => {
     }
 
     const behalfUserName = behalfUser ? getStaffFullName(behalfUser) : "";
-    const requesterEmailHtml = `
-<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"></head>
-<body style="font-family: Arial, sans-serif; background:#f4f4f4; margin:0; padding:0;">
-  <div style="max-width:600px;margin:0 auto;padding:20px;background:#fff;border-radius:6px;">
-    <h2 style="margin-top:0;color:#0088cc;">Request Created Successfully</h2>
-    <p>Your request has been registered in the helpdesk system.</p>
-    <table style="width:100%;border-collapse:collapse;">
-      <tr><td style="border:1px solid #ddd;padding:8px;"><b>Ticket ID</b></td><td style="border:1px solid #ddd;padding:8px;">${ticketId}</td></tr>
-      <tr><td style="border:1px solid #ddd;padding:8px;"><b>Target Department</b></td><td style="border:1px solid #ddd;padding:8px;">${targetDeptName}</td></tr>
-      <tr><td style="border:1px solid #ddd;padding:8px;"><b>Subject</b></td><td style="border:1px solid #ddd;padding:8px;">${subject}</td></tr>
-      <tr><td style="border:1px solid #ddd;padding:8px;"><b>Status</b></td><td style="border:1px solid #ddd;padding:8px;">${status}</td></tr>
-    </table>
-    <p>Please use the same ticket ID for future communication so this request stays in one thread.</p>
-    <p>Best regards,<br><b>The Helpdesk Team</b></p>
-  </div>
-</body></html>`;
+    const requesterEmailHtml = renderEmailLayout({
+      title: "Request Created Successfully",
+      intro: "Your request has been registered in the helpdesk system.",
+      rows: [
+        { label: "Ticket ID", value: ticketId },
+        { label: "Target Department", value: targetDeptName },
+        { label: "Subject", value: subject },
+        { label: "Status", value: status },
+      ],
+      outro: "Please use the same ticket ID for future communication so this request stays in one thread.",
+    });
 
     await notifyUsers([staff, behalfUser], ticketSubject, requesterEmailHtml);
 
@@ -407,7 +400,7 @@ exports.getRequestById = async (req, res) => {
     const r = await Request.findByPk(id);
 
     if (!r) return res.status(404).json({ success: false, message: "Request not found" });
-    if (!canViewRequest(staff, r)) {
+    if (!(await canViewRequest(staff, r))) {
       return res.status(403).json({ success: false, message: "You are not allowed to view this request." });
     }
 
@@ -500,7 +493,12 @@ exports.departmentRequests = async (req, res) => {
     const staffIds = (sameDeptStaff || []).map((s) => s.id);
 
     const data = await Request.findAll({
-      where: { staffId: { [Op.in]: staffIds } },
+      where: {
+        [Op.or]: [
+          { staffId: { [Op.in]: staffIds } },
+          { departmentId: activeDeptId },
+        ],
+      },
       order: [["createdAt", "DESC"]],
     });
 
@@ -568,23 +566,17 @@ exports.closeRequest = async (req, res) => {
     ]);
 
     const closeEmailSubject = buildTicketSubject(request.ticketId, request.subject);
-    const closeEmailHtml = `
-<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"></head>
-<body style="font-family: Arial, sans-serif; background:#f4f4f4; margin:0; padding:0;">
-  <div style="max-width:600px;margin:0 auto;padding:20px;background:#fff;border-radius:6px;">
-    <h2 style="margin-top:0;color:#0088cc;">Request Closed</h2>
-    <p>Your request has been marked as closed.</p>
-    <table style="width:100%;border-collapse:collapse;">
-      <tr><td style="border:1px solid #ddd;padding:8px;"><b>Ticket ID</b></td><td style="border:1px solid #ddd;padding:8px;">${request.ticketId}</td></tr>
-      <tr><td style="border:1px solid #ddd;padding:8px;"><b>Subject</b></td><td style="border:1px solid #ddd;padding:8px;">${request.subject}</td></tr>
-      <tr><td style="border:1px solid #ddd;padding:8px;"><b>Problem Description</b></td><td style="border:1px solid #ddd;padding:8px;">${request.problemDescription}</td></tr>
-      <tr><td style="border:1px solid #ddd;padding:8px;"><b>Action Taken</b></td><td style="border:1px solid #ddd;padding:8px;">${request.actionTakenComment}</td></tr>
-      <tr><td style="border:1px solid #ddd;padding:8px;"><b>Closed By</b></td><td style="border:1px solid #ddd;padding:8px;">${getStaffFullName(staff)}</td></tr>
-    </table>
-    <p>Best regards,<br><b>The Helpdesk Team</b></p>
-  </div>
-</body></html>`;
+    const closeEmailHtml = renderEmailLayout({
+      title: "Request Closed",
+      intro: "Your request has been marked as closed.",
+      rows: [
+        { label: "Ticket ID", value: request.ticketId },
+        { label: "Subject", value: request.subject },
+        { label: "Problem Description", value: request.problemDescription },
+        { label: "Action Taken", value: request.actionTakenComment },
+        { label: "Closed By", value: getStaffFullName(staff) },
+      ],
+    });
 
     await notifyUsers([requester, behalfUser], closeEmailSubject, closeEmailHtml);
 
@@ -771,38 +763,24 @@ exports.hod1ApproveRequest = async (req, res) => {
 
         const emailPromises = hod2Candidates.map((hod) => {
           const hodName = getStaffFullName(hod);
-          const emailSubject = `Request (HOD2 Approval Required): ${request.ticketId}`;
+          const emailSubject = buildTicketSubject(request.ticketId, request.subject);
 
-          const emailHtml = `
-<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"></head>
-<body style="font-family: Arial, sans-serif; background:#f4f4f4; margin:0; padding:0;">
-  <div style="max-width:600px;margin:0 auto;padding:20px;background:#fff;border-radius:6px;">
-    <div style="background:#DA251C;color:#fff;text-align:center;padding:16px;border-radius:6px 6px 0 0;">
-      <h2 style="margin:0;">MET Helpdesk</h2>
-    </div>
-    <div style="padding:16px;">
-      <p>Dear ${hodName},</p>
-      <p>A <strong>Request</strong> ticket has been <strong>approved by HOD1 (${staffName})</strong> and now requires your <strong>HOD2 approval and engineer assignment</strong>.</p>
-      <table style="width:100%;border-collapse:collapse;">
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Ticket ID</b></td><td style="border:1px solid #ddd;padding:8px;">${request.ticketId}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Department</b></td><td style="border:1px solid #ddd;padding:8px;">${targetDept.department}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Category</b></td><td style="border:1px solid #ddd;padding:8px;">${request.departmentCategory || "N/A"}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Priority</b></td><td style="border:1px solid #ddd;padding:8px;">${request.priority || "N/A"}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Status</b></td><td style="border:1px solid #ddd;padding:8px;">${request.status}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Subject</b></td><td style="border:1px solid #ddd;padding:8px;">${request.subject}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Description</b></td><td style="border:1px solid #ddd;padding:8px;">${request.description}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Location</b></td><td style="border:1px solid #ddd;padding:8px;">${request.location || "N/A"}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Raised by</b></td><td style="border:1px solid #ddd;padding:8px;">${requesterName}</td></tr>
-      </table>
-      <p style="margin-top:16px;">Please log in to the helpdesk system to approve as HOD2 and assign an engineer.</p>
-      <p>Best regards,<br><b>The Helpdesk Team</b></p>
-    </div>
-    <div style="text-align:center;color:#666;font-size:12px;padding:10px;background:#f4f4f4;border-radius:0 0 6px 6px;">
-      This is an automated email. Please do not reply.
-    </div>
-  </div>
-</body></html>`;
+          const emailHtml = renderEmailLayout({
+            title: "HOD2 Approval Required",
+            intro: `Dear ${hodName}, this request was approved by HOD1 (${staffName}) and now needs your HOD2 approval and engineer assignment.`,
+            rows: [
+              { label: "Ticket ID", value: request.ticketId },
+              { label: "Department", value: targetDept.department },
+              { label: "Category", value: request.departmentCategory || "N/A" },
+              { label: "Priority", value: request.priority || "N/A" },
+              { label: "Status", value: request.status },
+              { label: "Subject", value: request.subject },
+              { label: "Description", value: request.description },
+              { label: "Location", value: request.location || "N/A" },
+              { label: "Raised By", value: requesterName },
+            ],
+            outro: "Please log in to MET Helpdesk to approve as HOD2 and assign an engineer.",
+          });
 
           return sendEmail(hod.email, emailSubject, emailHtml).catch((err) =>
             console.error(`Failed to send HOD2 mail to ${hod.email}`, err)
@@ -913,39 +891,25 @@ exports.hod2ApproveRequest = async (req, res) => {
       const assigneeName = getStaffFullName(assignee);
       const hod2Name = getStaffFullName(staff);
 
-      const htmlEngineer = `
-<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"></head>
-<body style="font-family: Arial, sans-serif; background:#f4f4f4; margin:0; padding:0;">
-  <div style="max-width:600px;margin:0 auto;padding:20px;background:#fff;border-radius:6px;">
-    <div style="background:#DA251C;color:#fff;text-align:center;padding:16px;border-radius:6px 6px 0 0;">
-      <h2 style="margin:0;">MET Helpdesk</h2>
-    </div>
-    <div style="padding:16px;">
-      <p>Dear ${assigneeName},</p>
-      <p>A <strong>Request</strong> ticket has been <strong>approved by HOD2 (${hod2Name})</strong> and assigned to you.</p>
-      <table style="width:100%;border-collapse:collapse;">
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Ticket ID</b></td><td style="border:1px solid #ddd;padding:8px;">${request.ticketId}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Department</b></td><td style="border:1px solid #ddd;padding:8px;">${targetDept?.department || "N/A"}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Category</b></td><td style="border:1px solid #ddd;padding:8px;">${request.departmentCategory || "N/A"}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Priority</b></td><td style="border:1px solid #ddd;padding:8px;">${request.priority || "N/A"}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Status</b></td><td style="border:1px solid #ddd;padding:8px;">${request.status}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Subject</b></td><td style="border:1px solid #ddd;padding:8px;">${request.subject}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Description</b></td><td style="border:1px solid #ddd;padding:8px;">${request.description}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Location</b></td><td style="border:1px solid #ddd;padding:8px;">${request.location || "N/A"}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Raised by</b></td><td style="border:1px solid #ddd;padding:8px;">${requesterName}</td></tr>
-      </table>
-      <p style="margin-top:16px;">Please log in to the helpdesk system and process this request.</p>
-      <p>Best regards,<br><b>The Helpdesk Team</b></p>
-    </div>
-    <div style="text-align:center;color:#666;font-size:12px;padding:10px;background:#f4f4f4;border-radius:0 0 6px 6px;">
-      This is an automated email. Please do not reply.
-    </div>
-  </div>
-</body></html>`;
+      const htmlEngineer = renderEmailLayout({
+        title: "Request Assigned to You",
+        intro: `Dear ${assigneeName}, this request was approved by HOD2 (${hod2Name}) and assigned to you.`,
+        rows: [
+          { label: "Ticket ID", value: request.ticketId },
+          { label: "Department", value: targetDept?.department || "N/A" },
+          { label: "Category", value: request.departmentCategory || "N/A" },
+          { label: "Priority", value: request.priority || "N/A" },
+          { label: "Status", value: request.status },
+          { label: "Subject", value: request.subject },
+          { label: "Description", value: request.description },
+          { label: "Location", value: request.location || "N/A" },
+          { label: "Raised By", value: requesterName },
+        ],
+        outro: "Please log in to MET Helpdesk and process this request.",
+      });
 
       if (assignee.email) {
-        sendEmail(assignee.email, `Request Assigned: ${request.ticketId}`, htmlEngineer).catch((err) =>
+        sendEmail(assignee.email, buildTicketSubject(request.ticketId, request.subject), htmlEngineer).catch((err) =>
           console.error(`Failed to send engineer mail to ${assignee.email}`, err)
         );
       }
@@ -1064,36 +1028,21 @@ exports.rejectRequest = async (req, res) => {
       const requesterName = getStaffFullName(requester);
       const rejectorName = getStaffFullName(staff);
 
-      const html = `
-<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"></head>
-<body style="font-family: Arial, sans-serif; background:#f4f4f4; margin:0; padding:0;">
-  <div style="max-width:600px;margin:0 auto;padding:20px;background:#fff;border-radius:6px;">
-    <div style="background:#DA251C;color:#fff;text-align:center;padding:16px;border-radius:6px 6px 0 0;">
-      <h2 style="margin:0;">MET Helpdesk</h2>
-    </div>
-    <div style="padding:16px;">
-      <h3 style="color:#cc0000;margin-top:0;">Your Request has been Rejected</h3>
-      <p>Dear ${requesterName},</p>
-      <p>Your <strong>Request</strong> ticket has been <strong>rejected by ${rejectionLevel} (${rejectorName})</strong>.</p>
-      <table style="width:100%;border-collapse:collapse;">
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Ticket ID</b></td><td style="border:1px solid #ddd;padding:8px;">${request.ticketId}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Department</b></td><td style="border:1px solid #ddd;padding:8px;">${targetDept?.department || "N/A"}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Subject</b></td><td style="border:1px solid #ddd;padding:8px;">${request.subject}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Status</b></td><td style="border:1px solid #ddd;padding:8px;">${request.status}</td></tr>
-        <tr><td style="border:1px solid #ddd;padding:8px;"><b>Rejection Reason</b></td><td style="border:1px solid #ddd;padding:8px;">${request.rejectionComment}</td></tr>
-      </table>
-      <p style="margin-top:16px;">If you believe this is incorrect, please contact your HOD or the helpdesk team.</p>
-      <p>Best regards,<br><b>The Helpdesk Team</b></p>
-    </div>
-    <div style="text-align:center;color:#666;font-size:12px;padding:10px;background:#f4f4f4;border-radius:0 0 6px 6px;">
-      This is an automated email. Please do not reply.
-    </div>
-  </div>
-</body></html>`;
+      const html = renderEmailLayout({
+        title: "Request Rejected",
+        intro: `Dear ${requesterName}, your request was rejected by ${rejectionLevel} (${rejectorName}).`,
+        rows: [
+          { label: "Ticket ID", value: request.ticketId },
+          { label: "Department", value: targetDept?.department || "N/A" },
+          { label: "Subject", value: request.subject },
+          { label: "Status", value: request.status },
+          { label: "Rejection Reason", value: request.rejectionComment },
+        ],
+        outro: "If you believe this is incorrect, please contact your HOD or the helpdesk team.",
+      });
 
       if (requester.email) {
-        sendEmail(requester.email, `Request Rejected: ${request.ticketId}`, html).catch((err) =>
+        sendEmail(requester.email, buildTicketSubject(request.ticketId, request.subject), html).catch((err) =>
           console.error(`Failed to send rejection mail to ${requester.email}`, err)
         );
       }

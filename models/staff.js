@@ -54,6 +54,16 @@ const Staff = sequelize.define('staff', {
     type: Sequelize.STRING,
     allowNull: true
   },
+  canManageExtensions: {
+    type: Sequelize.BOOLEAN,
+    allowNull: false,
+    defaultValue: false
+  },
+  canManagePolicies: {
+    type: Sequelize.BOOLEAN,
+    allowNull: false,
+    defaultValue: false
+  },
   isNew: {
     type: Sequelize.BOOLEAN,
     allowNull: false

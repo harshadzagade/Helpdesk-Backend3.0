@@ -15,7 +15,7 @@ exports.verifyToken = async (req, res, next) => {
 
     // ✅ Pull latest user from DB
     const staff = await Staff.findByPk(decoded.id, {
-      attributes: ['id', 'email', 'role', 'departmentIds', 'instituteId']
+      attributes: ['id', 'email', 'role', 'departmentIds', 'instituteId', 'canManageExtensions', 'canManagePolicies']
     });
 
     if (!staff) return res.status(401).json({ message: 'Invalid token' });
@@ -27,6 +27,8 @@ exports.verifyToken = async (req, res, next) => {
       role: staff.role,
       instituteId: staff.instituteId,
       departmentIds: Array.isArray(staff.departmentIds) ? staff.departmentIds : [],
+      canManageExtensions: Boolean(staff.canManageExtensions),
+      canManagePolicies: Boolean(staff.canManagePolicies),
     };
 
     next();

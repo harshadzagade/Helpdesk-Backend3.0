@@ -4,6 +4,13 @@ const path = require('path');
 const fs = require('fs');
 const { Op } = require('sequelize');
 
+const canManagePolicies = (user) =>
+  String(user?.role || '').toLowerCase() === 'superadmin' || Boolean(user?.canManagePolicies);
+
+const canViewPolicy = (user, policy) =>
+  String(user?.role || '').toLowerCase() === 'superadmin' ||
+  (Array.isArray(policy?.assignRole) && policy.assignRole.includes(String(user?.role || '').toLowerCase()));
+
 const saveAttachment = async (file) => {
   // uploads/policies ke andar file save karenge
   const uploadDir = path.join(__dirname, '..', 'uploads', 'policies');
@@ -30,6 +37,10 @@ const saveAttachment = async (file) => {
 // =======================
 exports.createPolicy = async (req, res) => {
   try {
+    if (!canManagePolicies(req.user)) {
+      return res.status(403).json({ message: 'You are not allowed to upload policies' });
+    }
+
     let { policyName, assignRole } = req.body;
 
     if (!policyName || !assignRole) {
@@ -135,6 +146,10 @@ exports.getPolicyById = async (req, res) => {
       return res.status(404).json({ message: 'Policy not found' });
     }
 
+    if (!canViewPolicy(req.user, policy)) {
+      return res.status(403).json({ message: 'You are not allowed to view this policy' });
+    }
+
     return res
       .status(200)
       .json({ message: 'Policy fetched successfully', data: policy });
@@ -152,6 +167,10 @@ exports.getPolicyById = async (req, res) => {
 // =======================
 exports.updatePolicy = async (req, res) => {
   try {
+    if (!canManagePolicies(req.user)) {
+      return res.status(403).json({ message: 'You are not allowed to update policies' });
+    }
+
     const { id } = req.params;
     let { policyName, assignRole } = req.body;
 
@@ -218,6 +237,10 @@ exports.updatePolicy = async (req, res) => {
 // =======================
 exports.deletePolicy = async (req, res) => {
   try {
+    if (!canManagePolicies(req.user)) {
+      return res.status(403).json({ message: 'You are not allowed to delete policies' });
+    }
+
     const { id } = req.params;
 
     const policy = await Policy.findByPk(id);

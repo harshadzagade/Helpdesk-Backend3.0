@@ -1,7 +1,7 @@
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const Staff = require('../models/staff');
-const { sendMail } = require('../utils/mailer');
+const { renderEmailLayout, sendMail } = require('../utils/mailer');
 
 const makeOtp = () => String(Math.floor(100000 + Math.random() * 900000)); // 6-digit OTP
 
@@ -118,7 +118,9 @@ exports.login = async (req, res) => {
       role: staff.role,
       name: fullName,
       email: staff.email,
-      departmentIds: staff.departmentIds 
+      departmentIds: staff.departmentIds,
+      canManageExtensions: Boolean(staff.canManageExtensions),
+      canManagePolicies: Boolean(staff.canManagePolicies),
     });
   } catch (error) {
     console.error('Error in login:', error);
@@ -168,7 +170,9 @@ exports.setInitialPassword = async (req, res) => {
       id: staff.id,
       role: staff.role,
       name: fullName,
-      email: staff.email
+      email: staff.email,
+      canManageExtensions: Boolean(staff.canManageExtensions),
+      canManagePolicies: Boolean(staff.canManagePolicies),
     });
   } catch (error) {
     console.error('Error in setInitialPassword:', error);
@@ -200,16 +204,16 @@ exports.forgotPassword = async (req, res) => {
     // Send email with OTP
     await sendMail({
       to: email,
-      subject: 'Helpdesk Password Reset OTP',
-      html: `
-        <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
-          <h2>Password Reset</h2>
-          <p>Your OTP for password reset:</p>
-          <div style="font-size: 28px; font-weight: 700; letter-spacing: 6px; background: #f0f0f0; padding: 10px; text-align: center; margin: 20px 0;">${otp}</div>
-          <p>This code expires in ${OTP_TTL_MIN} minutes.</p>
-          <p>If you didn't request this, please ignore this email.</p>
-        </div>
-      `,
+      subject: 'MET Helpdesk Password Reset OTP',
+      html: renderEmailLayout({
+        title: 'Password Reset OTP',
+        intro: 'We received a request to reset your password. Use the OTP below to continue securely.',
+        rows: [
+          { label: 'OTP', value: otp },
+          { label: 'Valid For', value: `${OTP_TTL_MIN} minutes` },
+        ],
+        outro: "If you didn't request this, you can safely ignore this email.",
+      }),
       text: `Your OTP is ${otp}. It expires in ${OTP_TTL_MIN} minutes. If you didn't request this, ignore this email.`
     });
 

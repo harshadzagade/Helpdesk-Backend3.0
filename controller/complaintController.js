@@ -8,7 +8,7 @@ const sequelize = require('../config/db');
 const { Op } = require('sequelize');
 const fs = require('fs');
 const path = require('path');
-const { buildTicketSubject, sendMail } = require('../utils/mailer');
+const { buildTicketSubject, renderEmailLayout, sendMail } = require('../utils/mailer');
 const { buildTicketId } = require('../utils/ticketId');
 
 // ---------------- helpers ----------------
@@ -248,56 +248,28 @@ exports.createComplaint = async (req, res) => {
         attachmentPaths.push(`/uploads/complaints/${finalFileName}`);
       }
     }
-
-    // -------- ticketId generation ----------
-    const now = new Date();
-    const year = now.getFullYear();
-    const prefix = `#C${year}`;
-
-    // ✅ only take last complaint of THIS YEAR
-    const lastComplaint = await Complaint.findOne({
-      where: {
-        ticketId: { [Op.like]: `${prefix}%` },
-      },
-      order: [['createdAt', 'DESC'], ['id', 'DESC']],
-    });
-
-    let sequence = 1;
-
-    if (lastComplaint?.ticketId) {
-      // ✅ Extract last 3 digits from "#C2026001"
-      const match = String(lastComplaint.ticketId).match(/^#C(\d{4})(\d{3})$/);
-
-      if (match) {
-        const lastYear = Number(match[1]);
-        const lastSeq = Number(match[2]);
-
-        if (lastYear === year && Number.isFinite(lastSeq)) {
-          sequence = lastSeq + 1;
-        }
-      }
-    }
-
-    const counter = String(sequence).padStart(3, '0');
-    const ticketId = `${prefix}${counter}`;
-
-
     // -------- create complaint ----------
-    const newComplaint = await Complaint.create({
-      ticketId,
-      staffId: staff.id,
-      behalf: behalfBool,
-      behalfId: behalfBool ? behalfId : null,
-      status,
-      departmentId: deptId,
-      departmentCategory,
-      priority,
-      subject,
-      description,
-      location,
-      isRepeated: isRepeatedBool,
-      attachments: attachmentPaths,
+    const newComplaint = await sequelize.transaction(async (transaction) => {
+      const ticketId = await generateComplaintTicketId(transaction);
+
+      return Complaint.create({
+        ticketId,
+        staffId: staff.id,
+        behalf: behalfBool,
+        behalfId: behalfBool ? behalfId : null,
+        status,
+        departmentId: deptId,
+        departmentCategory,
+        priority,
+        subject,
+        description,
+        location,
+        isRepeated: isRepeatedBool,
+        attachments: attachmentPaths,
+      }, { transaction });
     });
+
+    const ticketId = newComplaint.ticketId;
 
     // -------- notify department staff ----------
     const isOtherDepartment = !hasDeptAccess(staff, deptId);
@@ -319,79 +291,24 @@ exports.createComplaint = async (req, res) => {
           const staffName = fullNameOf(staff);
           const behalfUserName = behalfUser ? fullNameOf(behalfUser) : '';
           const emailSubject = buildTicketSubject(ticketId, subject);
-          const emailHtml = `
-<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Helpdesk Ticket Notification</title></head>
-<body style="font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4;">
-  <div style="max-width: 600px; margin: 0 auto; padding: 20px; background-color: #ffffff; border-radius: 5px; box-shadow: 0 2px 5px rgba(0,0,0,0.1);">
-    <div style="background-color: #DA251C; color: #ffffff; text-align: center; padding: 20px; border-top-left-radius: 5px; border-top-right-radius: 5px;">
-      <h1 style="margin: 0; font-size: 24px;">MET Helpdesk</h1>
-    </div>
-    <div style="padding: 20px;">
-      <h2 style="color: #0088cc; margin-top: 0;">Helpdesk Ticket Notification</h2>
-      <p>Dear ${targetName},</p>
-      <p>A new ticket has been generated and assigned to your department (${departmentName}) with the following details:</p>
-      <table style="width: 100%; border-collapse: collapse; margin: 10px 0;">
-        <tr style="background-color: #f9f9f9;">
-          <td style="padding: 8px; font-weight: bold; border: 1px solid #ddd;">Ticket ID:</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${ticketId}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px; font-weight: bold; border: 1px solid #ddd;">Ticket Type:</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">Complaint</td>
-        </tr>
-        <tr style="background-color: #f9f9f9;">
-          <td style="padding: 8px; font-weight: bold; border: 1px solid #ddd;">Department:</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${departmentName}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px; font-weight: bold; border: 1px solid #ddd;">Category:</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${departmentCategory || ''}</td>
-        </tr>
-        <tr style="background-color: #f9f9f9;">
-          <td style="padding: 8px; font-weight: bold; border: 1px solid #ddd;">Priority:</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${priority || ''}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px; font-weight: bold; border: 1px solid #ddd;">Status:</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${status}</td>
-        </tr>
-        <tr style="background-color: #f9f9f9;">
-          <td style="padding: 8px; font-weight: bold; border: 1px solid #ddd;">Subject:</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${subject}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px; font-weight: bold; border: 1px solid #ddd;">Description:</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${description}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px; font-weight: bold; border: 1px solid #ddd;">Location:</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">${location || ''}</td>
-        </tr>
-        <tr style="background-color: #f9f9f9;">
-          <td style="padding: 8px; font-weight: bold; border: 1px solid #ddd;">Raised by:</td>
-          <td style="padding: 8px; border: 1px solid #ddd;">
-            ${staffName}${behalfBool ? ` (on behalf of ${behalfUserName})` : ''}
-          </td>
-        </tr>
-        ${isRepeatedBool
-              ? `<tr style="background-color: #f9f9f9;">
-                 <td style="padding: 8px; font-weight: bold; border: 1px solid #ddd;">Repeated Complaint:</td>
-                 <td style="padding: 8px; border: 1px solid #ddd;">Yes</td>
-               </tr>`
-              : ''
-            }
-      </table>
-      <p style="margin-top: 20px;">Please log in to the helpdesk system to review and take necessary action.</p>
-      <p>Best regards,<br><strong>The Helpdesk Team</strong></p>
-    </div>
-    <div style="text-align: center; padding: 10px; background-color: #f4f4f4; border-bottom-left-radius: 5px; border-bottom-right-radius: 5px; font-size: 12px; color: #666;">
-      <p>This is an automated email. Please do not reply.</p>
-    </div>
-  </div>
-</body>
-</html>`;
+          const emailHtml = renderEmailLayout({
+            title: 'Complaint Notification',
+            intro: `Dear ${targetName}, a new complaint has been generated for your department (${departmentName}).`,
+            rows: [
+              { label: 'Ticket ID', value: ticketId },
+              { label: 'Ticket Type', value: 'Complaint' },
+              { label: 'Department', value: departmentName },
+              { label: 'Category', value: departmentCategory || 'N/A' },
+              { label: 'Priority', value: priority || 'N/A' },
+              { label: 'Status', value: status },
+              { label: 'Subject', value: subject },
+              { label: 'Description', value: description },
+              { label: 'Location', value: location || 'N/A' },
+              { label: 'Raised By', value: `${staffName}${behalfBool ? ` (on behalf of ${behalfUserName})` : ''}` },
+              { label: 'Repeated Complaint', value: isRepeatedBool ? 'Yes' : null },
+            ],
+            outro: 'Please log in to MET Helpdesk to review and take necessary action.',
+          });
 
           try {
             await sendEmail(target.email, emailSubject, emailHtml);
@@ -417,25 +334,17 @@ exports.createComplaint = async (req, res) => {
 
     const behalfUserName = behalfUser ? fullNameOf(behalfUser) : '';
     const requesterEmailSubject = buildTicketSubject(ticketId, subject);
-    const requesterEmailHtml = `
-<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Complaint Created</title></head>
-<body style="font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4;">
-  <div style="max-width: 600px; margin: 0 auto; padding: 20px; background-color: #ffffff; border-radius: 5px;">
-    <h2 style="color: #0088cc;">Complaint Created Successfully</h2>
-    <p>Your complaint has been registered in the helpdesk system.</p>
-    <table style="width: 100%; border-collapse: collapse; margin: 10px 0;">
-      <tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Ticket ID</td><td style="padding: 8px; border: 1px solid #ddd;">${ticketId}</td></tr>
-      <tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Subject</td><td style="padding: 8px; border: 1px solid #ddd;">${subject}</td></tr>
-      <tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Department</td><td style="padding: 8px; border: 1px solid #ddd;">${departmentName}</td></tr>
-      <tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Status</td><td style="padding: 8px; border: 1px solid #ddd;">${status}</td></tr>
-    </table>
-    <p>Please use the same ticket ID for future communication so this request stays in one thread.</p>
-    <p>Best regards,<br><strong>The Helpdesk Team</strong></p>
-  </div>
-</body>
-</html>`;
+    const requesterEmailHtml = renderEmailLayout({
+      title: 'Complaint Created Successfully',
+      intro: 'Your complaint has been registered in the helpdesk system.',
+      rows: [
+        { label: 'Ticket ID', value: ticketId },
+        { label: 'Subject', value: subject },
+        { label: 'Department', value: departmentName },
+        { label: 'Status', value: status },
+      ],
+      outro: 'Please use the same ticket ID for future communication so this complaint stays in one thread.',
+    });
 
     await notifyUsers([staff, behalfUser], requesterEmailSubject, requesterEmailHtml);
 
@@ -920,25 +829,17 @@ exports.closeComplaint = async (req, res) => {
     ]);
 
     const closeEmailSubject = buildTicketSubject(complaint.ticketId, complaint.subject);
-    const closeEmailHtml = `
-<!DOCTYPE html>
-<html lang="en">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Complaint Closed</title></head>
-<body style="font-family: Arial, sans-serif; margin: 0; padding: 0; background-color: #f4f4f4;">
-  <div style="max-width: 600px; margin: 0 auto; padding: 20px; background-color: #ffffff; border-radius: 5px;">
-    <h2 style="color: #0088cc;">Complaint Closed</h2>
-    <p>Your complaint has been marked as closed.</p>
-    <table style="width: 100%; border-collapse: collapse; margin: 10px 0;">
-      <tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Ticket ID</td><td style="padding: 8px; border: 1px solid #ddd;">${complaint.ticketId}</td></tr>
-      <tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Subject</td><td style="padding: 8px; border: 1px solid #ddd;">${complaint.subject}</td></tr>
-      <tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Problem Description</td><td style="padding: 8px; border: 1px solid #ddd;">${complaint.problemDescription}</td></tr>
-      <tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Action Taken</td><td style="padding: 8px; border: 1px solid #ddd;">${complaint.actionTakenComment}</td></tr>
-      <tr><td style="padding: 8px; border: 1px solid #ddd; font-weight: bold;">Closed By</td><td style="padding: 8px; border: 1px solid #ddd;">${fullNameOf(staff)}</td></tr>
-    </table>
-    <p>Best regards,<br><strong>The Helpdesk Team</strong></p>
-  </div>
-</body>
-</html>`;
+    const closeEmailHtml = renderEmailLayout({
+      title: 'Complaint Closed',
+      intro: 'Your complaint has been marked as closed.',
+      rows: [
+        { label: 'Ticket ID', value: complaint.ticketId },
+        { label: 'Subject', value: complaint.subject },
+        { label: 'Problem Description', value: complaint.problemDescription },
+        { label: 'Action Taken', value: complaint.actionTakenComment },
+        { label: 'Closed By', value: fullNameOf(staff) },
+      ],
+    });
 
     await notifyUsers([requester, behalfUser], closeEmailSubject, closeEmailHtml);
 
@@ -1073,3 +974,4 @@ exports.forwardComplaint = async (req, res) => {
     });
   }
 };
+

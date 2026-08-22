@@ -5,6 +5,8 @@ const cors = require('cors');
 const seedSuperAdmin = require('./config/seedSuperAdmin');
 const fileUpload = require('express-fileupload');
 const path = require('path');
+const { QueryTypes } = require('sequelize');
+const { startReminderScheduler } = require('./utils/reminderJob');
 
 // Routes Imports
 const authRoute = require('./routes/authRoute');
@@ -17,6 +19,7 @@ const requestRoutes = require('./routes/requestRoutes');
 const policyRoutes = require('./routes/policyRoutes');
 const SubadminActivityRoute = require('./routes/subAdminRoute');
 const dashboardRoutes = require("./routes/dashboardRoutes");
+const reportRoutes = require('./routes/reportRoutes');
 
 
 
@@ -56,17 +59,51 @@ app.use('/api/requests', requestRoutes);
 app.use('/api/policies', policyRoutes);
 app.use('/api/subadmin-activities', SubadminActivityRoute);
 app.use("/api/dashboard", dashboardRoutes);
+app.use('/api/reports', reportRoutes);
 
 const PORT = 5000;
+
+const ensureUniqueTicketIndexes = async () => {
+  const duplicateChecks = [
+    { tableName: 'complaint', label: 'complaint' },
+    { tableName: '"request"', label: 'request' },
+  ];
+
+  for (const { tableName, label } of duplicateChecks) {
+    const duplicates = await db.query(
+      `SELECT "ticketId", COUNT(*)::int AS count
+       FROM ${tableName}
+       WHERE "ticketId" IS NOT NULL
+       GROUP BY "ticketId"
+       HAVING COUNT(*) > 1`,
+      { type: QueryTypes.SELECT }
+    );
+
+    if (duplicates.length > 0) {
+      const duplicateList = duplicates.map((row) => row.ticketId).join(', ');
+      throw new Error(`Duplicate ${label} ticketId values already exist: ${duplicateList}`);
+    }
+  }
+
+  await db.query(
+    'CREATE UNIQUE INDEX IF NOT EXISTS complaint_ticket_id_unique_idx ON complaint ("ticketId") WHERE "ticketId" IS NOT NULL'
+  );
+  await db.query(
+    'CREATE UNIQUE INDEX IF NOT EXISTS request_ticket_id_unique_idx ON "request" ("ticketId") WHERE "ticketId" IS NOT NULL'
+  );
+};
+
 //server start
 const startServer = async () => {
   try {
     await db.sync({ force: false });
+    await ensureUniqueTicketIndexes();
     console.log("Database connected");
     await seedSuperAdmin();
 
     app.listen(PORT, () => {
       console.log(`Server is running on port ${PORT}...`);
+      startReminderScheduler();
     });
   } catch (error) {
     console.error("Error connecting to database:", error);

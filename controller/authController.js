@@ -4,6 +4,7 @@ const Staff = require('../models/staff');
 const { renderEmailLayout, sendMail } = require('../utils/mailer');
 
 const makeOtp = () => String(Math.floor(100000 + Math.random() * 900000)); // 6-digit OTP
+const AUTH_TOKEN_EXPIRES_IN = '8h';
 
 // Helper to construct full name
 const getFullName = (staff) => {
@@ -108,7 +109,7 @@ exports.login = async (req, res) => {
     const token = jwt.sign(
       { id: staff.id, email: staff.email, name: fullName, role: staff.role },
       process.env.JWT_SECRET,
-      { expiresIn: '1d' }
+      { expiresIn: AUTH_TOKEN_EXPIRES_IN }
     );
 
     res.status(200).json({
@@ -121,6 +122,7 @@ exports.login = async (req, res) => {
       departmentIds: staff.departmentIds,
       canManageExtensions: Boolean(staff.canManageExtensions),
       canManagePolicies: Boolean(staff.canManagePolicies),
+      expiresIn: AUTH_TOKEN_EXPIRES_IN,
     });
   } catch (error) {
     console.error('Error in login:', error);
@@ -155,7 +157,7 @@ exports.setInitialPassword = async (req, res) => {
     const token = jwt.sign(
       { id: staff.id, email: staff.email, name: fullName, role: staff.role },
       process.env.JWT_SECRET,
-      { expiresIn: '1d' }
+      { expiresIn: AUTH_TOKEN_EXPIRES_IN }
     );
     
     // THEN update password and save
@@ -173,6 +175,7 @@ exports.setInitialPassword = async (req, res) => {
       email: staff.email,
       canManageExtensions: Boolean(staff.canManageExtensions),
       canManagePolicies: Boolean(staff.canManagePolicies),
+      expiresIn: AUTH_TOKEN_EXPIRES_IN,
     });
   } catch (error) {
     console.error('Error in setInitialPassword:', error);

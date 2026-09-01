@@ -6,6 +6,7 @@ const Department = require('../models/department');
 const ReminderLog = require('../models/reminderLog');
 const ReminderSetting = require('../models/reminderSetting');
 const { buildTicketSubject, renderEmailLayout, sendMail } = require('./mailer');
+const { emitTicketReminderRefresh } = require('./realtime');
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 let jobRunning = false;
@@ -379,6 +380,10 @@ const runReminderJob = async () => {
     console.log('Reminder job completed:', summary);
     lastRunAt = new Date();
     lastRunSummary = summary;
+    emitTicketReminderRefresh({
+      roles: ['admin', 'subadmin', 'engineer', 'user'],
+      reason: 'reminder-job-run',
+    });
     return summary;
   } finally {
     jobRunning = false;

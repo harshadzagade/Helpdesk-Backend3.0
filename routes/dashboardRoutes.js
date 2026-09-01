@@ -11,6 +11,7 @@ const {
     engineerSummary,
     engineerAssignedTickets,
     userSummary,
+    ticketReminderPopup,
     getReminderStatus,
     getReminderLogs,
     runReminderCheck,
@@ -23,6 +24,7 @@ router.get("/admin", verifyToken, activeDepartment, adminSummary);
 router.get("/engineer", verifyToken, engineerSummary);
 router.get("/engineer/tickets", verifyToken, engineerAssignedTickets);
 router.get("/user", verifyToken, userSummary);
+router.get("/ticket-reminders", verifyToken, ticketReminderPopup);
 router.get("/reminders/status", verifyToken, getReminderStatus);
 router.get("/reminders/logs", verifyToken, getReminderLogs);
 router.put("/reminders/status", verifyToken, updateReminderStatus);

@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const { buildTicketSubject, renderEmailLayout, sendMail } = require('../utils/mailer');
 const { buildTicketId } = require('../utils/ticketId');
+const { emitTicketReminderRefresh } = require('../utils/realtime');
 
 // ---------------- helpers ----------------
 const toInt = (v) => {
@@ -347,6 +348,12 @@ exports.createComplaint = async (req, res) => {
     });
 
     await notifyUsers([staff, behalfUser], requesterEmailSubject, requesterEmailHtml);
+    emitTicketReminderRefresh({
+      userIds: [staff.id, behalfUser?.id],
+      roles: ['admin', 'subadmin', 'engineer'],
+      departmentIds: [deptId],
+      reason: 'complaint-created',
+    });
 
     return res.status(201).json({
       success: true,
@@ -636,6 +643,12 @@ exports.assignComplaintToSelf = async (req, res) => {
         entityId: complaint.id
       });
     }
+    emitTicketReminderRefresh({
+      userIds: [staff.id, complaint.staffId, complaint.behalfId],
+      roles: ['admin', 'subadmin', 'engineer'],
+      departmentIds: [complaint.departmentId],
+      reason: 'complaint-assigned',
+    });
 
     return res.status(200).json({
       success: true,
@@ -746,6 +759,12 @@ exports.assignComplaintToStaff = async (req, res) => {
         entityId: complaint.id,
       });
     }
+    emitTicketReminderRefresh({
+      userIds: [staff.id, assignToStaffId, complaint.staffId, complaint.behalfId],
+      roles: ['admin', 'subadmin', 'engineer'],
+      departmentIds: [complaint.departmentId],
+      reason: 'complaint-assigned',
+    });
 
     return res.status(200).json({
       success: true,
@@ -852,6 +871,12 @@ exports.closeComplaint = async (req, res) => {
         entityId: complaint.id,
       });
     }
+    emitTicketReminderRefresh({
+      userIds: [staff.id, complaint.staffId, complaint.behalfId, complaint.assignStaffId],
+      roles: ['admin', 'subadmin', 'engineer'],
+      departmentIds: [complaint.departmentId],
+      reason: 'complaint-closed',
+    });
 
     return res.status(200).json({
       success: true,
@@ -956,6 +981,12 @@ exports.forwardComplaint = async (req, res) => {
         entityId: complaint.id
       });
     }
+    emitTicketReminderRefresh({
+      userIds: [staff.id, forwardToStaffId, complaint.staffId, complaint.behalfId],
+      roles: ['admin', 'subadmin', 'engineer'],
+      departmentIds: [complaint.departmentId],
+      reason: 'complaint-forwarded',
+    });
 
     return res.status(200).json({
       success: true,

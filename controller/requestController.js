@@ -10,6 +10,7 @@ const fs = require("fs");
 const path = require("path");
 const { buildTicketSubject, renderEmailLayout, sendMail } = require("../utils/mailer");
 const { buildTicketId } = require("../utils/ticketId");
+const { emitTicketReminderRefresh } = require("../utils/realtime");
 
 /* ========================= HELPERS ========================= */
 
@@ -359,6 +360,12 @@ exports.createRequest = async (req, res) => {
     });
 
     await notifyUsers([staff, behalfUser], ticketSubject, requesterEmailHtml);
+    emitTicketReminderRefresh({
+      userIds: [staff.id, behalfUser?.id],
+      roles: ["admin", "subadmin"],
+      departmentIds: [...requesterDeptIds, departmentId],
+      reason: "request-created",
+    });
 
     return res.status(201).json({
       success: true,
@@ -589,6 +596,12 @@ exports.closeRequest = async (req, res) => {
         entityId: request.id,
       });
     }
+    emitTicketReminderRefresh({
+      userIds: [staff.id, request.staffId, request.behalfId, request.assignStaffId],
+      roles: ["admin", "subadmin", "engineer"],
+      departmentIds: [request.departmentId],
+      reason: "request-closed",
+    });
 
     return res.status(200).json({ success: true, message: "Request closed successfully.", data: request });
   } catch (error) {
@@ -666,6 +679,12 @@ exports.forwardRequest = async (req, res) => {
         entityId: request.id,
       });
     }
+    emitTicketReminderRefresh({
+      userIds: [staff.id, forwardToStaffId, request.staffId, request.behalfId],
+      roles: ["admin", "subadmin", "engineer"],
+      departmentIds: [request.departmentId],
+      reason: "request-forwarded",
+    });
 
     return res.status(200).json({
       success: true,
@@ -790,6 +809,12 @@ exports.hod1ApproveRequest = async (req, res) => {
         await Promise.all(emailPromises);
       }
     }
+    emitTicketReminderRefresh({
+      userIds: [staff.id, request.staffId, request.behalfId],
+      roles: ["admin", "subadmin"],
+      departmentIds: [...requesterDeptIds, request.departmentId],
+      reason: "request-hod1-approved",
+    });
 
     return res.status(200).json({ success: true, message: "HOD1 approval done successfully.", data: request });
   } catch (error) {
@@ -916,6 +941,12 @@ exports.hod2ApproveRequest = async (req, res) => {
     } catch (e) {
       console.error("Error sending engineer mail after HOD2:", e);
     }
+    emitTicketReminderRefresh({
+      userIds: [staff.id, assignStaffId, request.staffId, request.behalfId],
+      roles: ["admin", "subadmin", "engineer"],
+      departmentIds: [request.departmentId],
+      reason: "request-hod2-approved",
+    });
 
     return res.status(200).json({
       success: true,
@@ -1049,6 +1080,12 @@ exports.rejectRequest = async (req, res) => {
     } catch (mailErr) {
       console.error("Error sending rejection mail:", mailErr);
     }
+    emitTicketReminderRefresh({
+      userIds: [staff.id, request.staffId, request.behalfId, request.assignStaffId],
+      roles: ["admin", "subadmin", "engineer"],
+      departmentIds: [request.departmentId, commonDeptId],
+      reason: "request-rejected",
+    });
 
     return res.status(200).json({
       success: true,

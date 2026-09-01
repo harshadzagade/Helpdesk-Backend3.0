@@ -15,6 +15,7 @@ const Department = require("../models/department");
 const SubadminActivity = require("../models/subadminActivity");
 const ReminderLog = require("../models/reminderLog");
 const { getReminderSchedulerStatus, runReminderJob, updateReminderSettings } = require("../utils/reminderJob");
+const { emitTicketReminderRefresh } = require("../utils/realtime");
 const { buildTicketSubject, renderEmailLayout, sendMail } = require("../utils/mailer");
 
 /* ========================= HELPERS ========================= */
@@ -33,6 +34,7 @@ const normalizeType = (t) =>
     String(t || "all").toLowerCase().trim(); // all | complaint | request
 
 const normalizeStatusKey = (s) => String(s || "").toLowerCase().trim();
+const isClosedStatus = (status) => normalizeStatusKey(status) === "closed";
 
 const buildDateWhere = (from, to) => ({
     createdAt: { [Op.between]: [from, to] },
@@ -249,6 +251,18 @@ async function recentTickets(whereBaseC = {}, whereBaseR = {}, limit = 10) {
 
     return mix.slice(0, limit);
 }
+
+const reminderTicketPayload = (row, type, reason) => ({
+    id: row.id,
+    ticketId: row.ticketId,
+    type,
+    reason,
+    subject: row.subject || "No subject",
+    status: row.status || "N/A",
+    priority: row.priority || "N/A",
+    createdAt: row.createdAt,
+    path: type === "Complaint" ? `/complaints/${row.id}` : `/requests/${row.id}`,
+});
 
 async function trendLastDays(whereBaseC = {}, whereBaseR = {}, days = 7) {
     const end = new Date();
@@ -765,6 +779,159 @@ exports.userSummary = async (req, res) => {
     }
 };
 
+exports.ticketReminderPopup = async (req, res) => {
+    try {
+        const staff = await getCurrentStaff(req);
+        const role = roleLower(staff);
+        const limit = Math.min(toInt(req.query.limit) || 10, 30);
+
+        if (["admin", "subadmin"].includes(role)) {
+            const staffDeptIds = deptIdsOf(staff).map(Number);
+            const activeDeptId = toInt(req.headers["x-department-id"]);
+            const scopedDeptIds = activeDeptId ? [activeDeptId] : staffDeptIds;
+            const items = [];
+
+            const hod1Queue = await Request.findAll({
+                where: {
+                    hod1Approval: false,
+                    status: { [Op.notIn]: ["closed", "Closed", "rejected", "Rejected"] },
+                },
+                order: [["createdAt", "DESC"]],
+                limit: 50,
+                attributes: ["id", "ticketId", "subject", "status", "priority", "createdAt", "staffId", "departmentId"],
+            });
+
+            for (const item of hod1Queue) {
+                const requester = await Staff.findByPk(item.staffId, {
+                    attributes: ["id", "departmentIds"],
+                });
+                const requesterDeptIds = deptIdsOf(requester).map(Number);
+                if (requesterDeptIds.some((deptId) => scopedDeptIds.includes(deptId))) {
+                    items.push(reminderTicketPayload(item, "Request", "Pending HOD 1 approval"));
+                }
+                if (items.length >= limit) break;
+            }
+
+            if (items.length < limit) {
+                const hod2Queue = await Request.findAll({
+                    where: {
+                        hod1Approval: true,
+                        hod2Approval: false,
+                        departmentId: { [Op.in]: scopedDeptIds.length ? scopedDeptIds : [-1] },
+                        status: { [Op.notIn]: ["closed", "Closed", "rejected", "Rejected"] },
+                    },
+                    order: [["createdAt", "DESC"]],
+                    limit,
+                    attributes: ["id", "ticketId", "subject", "status", "priority", "createdAt", "staffId", "departmentId"],
+                });
+
+                hod2Queue.forEach((item) => {
+                    if (items.length < limit && !items.some((existing) => existing.id === item.id)) {
+                        items.push(reminderTicketPayload(item, "Request", "Pending HOD 2 approval"));
+                    }
+                });
+            }
+
+            return res.json({
+                success: true,
+                data: {
+                    title: "Pending Approvals",
+                    count: items.length,
+                    items,
+                },
+            });
+        }
+
+        if (["engineer", "engineers"].includes(role)) {
+            const [complaints, requests] = await Promise.all([
+                Complaint.findAll({
+                    where: {
+                        assignStaffId: staff.id,
+                        resolvedAt: { [Op.is]: null },
+                        status: { [Op.notIn]: ["closed", "Closed", "rejected", "Rejected"] },
+                    },
+                    order: [["createdAt", "DESC"]],
+                    limit,
+                    attributes: ["id", "ticketId", "subject", "status", "priority", "createdAt"],
+                }),
+                Request.findAll({
+                    where: {
+                        assignStaffId: staff.id,
+                        resolvedAt: { [Op.is]: null },
+                        status: { [Op.notIn]: ["closed", "Closed", "rejected", "Rejected"] },
+                    },
+                    order: [["createdAt", "DESC"]],
+                    limit,
+                    attributes: ["id", "ticketId", "subject", "status", "priority", "createdAt"],
+                }),
+            ]);
+
+            const items = [
+                ...complaints.map((item) => reminderTicketPayload(item, "Complaint", "Pending to attend / close")),
+                ...requests.map((item) => reminderTicketPayload(item, "Request", "Pending to attend / close")),
+            ]
+                .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+                .slice(0, limit);
+
+            return res.json({
+                success: true,
+                data: {
+                    title: "Assigned Tickets",
+                    count: items.length,
+                    items,
+                },
+            });
+        }
+
+        if (role === "user") {
+            const [complaints, requests] = await Promise.all([
+                Complaint.findAll({
+                    where: { staffId: staff.id, status: { [Op.iLike]: "closed" } },
+                    order: [["updatedAt", "DESC"]],
+                    limit,
+                    attributes: ["id", "ticketId", "subject", "status", "priority", "createdAt", "updatedAt"],
+                }),
+                Request.findAll({
+                    where: { staffId: staff.id, status: { [Op.iLike]: "closed" } },
+                    order: [["updatedAt", "DESC"]],
+                    limit,
+                    attributes: ["id", "ticketId", "subject", "status", "priority", "createdAt", "updatedAt"],
+                }),
+            ]);
+
+            const items = [
+                ...complaints.map((item) => reminderTicketPayload(item, "Complaint", "Ticket has been closed")),
+                ...requests.map((item) => reminderTicketPayload(item, "Request", "Ticket has been closed")),
+            ]
+                .sort((a, b) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt))
+                .slice(0, limit);
+
+            return res.json({
+                success: true,
+                data: {
+                    title: "Closed Tickets",
+                    count: items.length,
+                    items,
+                },
+            });
+        }
+
+        return res.json({
+            success: true,
+            data: {
+                title: "Ticket Reminders",
+                count: 0,
+                items: [],
+            },
+        });
+    } catch (e) {
+        return res.status(e.statusCode || 500).json({
+            success: false,
+            message: e.message || "Failed to load ticket reminders",
+        });
+    }
+};
+
 exports.runReminderCheck = async (req, res) => {
     try {
         const staff = await getCurrentStaff(req);
@@ -773,6 +940,10 @@ exports.runReminderCheck = async (req, res) => {
         }
 
         const summary = await runReminderJob();
+        emitTicketReminderRefresh({
+            roles: ["admin", "subadmin", "engineer", "user"],
+            reason: "reminder-job-run",
+        });
         return res.json({ success: true, data: summary });
     } catch (e) {
         return res.status(e.statusCode || 500).json({

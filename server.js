@@ -5,8 +5,10 @@ const cors = require('cors');
 const seedSuperAdmin = require('./config/seedSuperAdmin');
 const fileUpload = require('express-fileupload');
 const path = require('path');
+const http = require('http');
 const { QueryTypes } = require('sequelize');
 const { startReminderScheduler } = require('./utils/reminderJob');
+const { initializeRealtime } = require('./utils/realtime');
 
 // Routes Imports
 const authRoute = require('./routes/authRoute');
@@ -28,10 +30,22 @@ db.authenticate()
   .catch(err => console.log('Error: ' + err));
 
 const app = express();
+const server = http.createServer(app);
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://hello.met.edu',
+  'http://hello.met.edu:5173',
+  'https://hello.met.edu',
+  'https://hello.met.edu:5173',
+  ...String(process.env.FRONTEND_URL || process.env.CORS_ORIGIN || '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+];
 
 // ✅ CORS FIRST — before routes
 app.use(cors({
-  origin: 'http://localhost:5173',   // your Vite dev URL
+  origin: [...new Set(allowedOrigins)],
   methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
   allowedHeaders: ['Content-Type','Authorization','x-department-id'],
   credentials: false                  // keep false if using JWT in headers
@@ -101,7 +115,9 @@ const startServer = async () => {
     console.log("Database connected");
     await seedSuperAdmin();
 
-    app.listen(PORT, () => {
+    initializeRealtime(server);
+
+    server.listen(PORT, () => {
       console.log(`Server is running on port ${PORT}...`);
       startReminderScheduler();
     });

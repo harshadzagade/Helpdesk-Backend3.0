@@ -16,6 +16,7 @@ const {
     getReminderLogs,
     runReminderCheck,
     sendReminderTestEmail,
+    rephraseText,
     updateReminderStatus,
 } = require("../controller/dashboardController");
 
@@ -30,5 +31,6 @@ router.get("/reminders/logs", verifyToken, getReminderLogs);
 router.put("/reminders/status", verifyToken, updateReminderStatus);
 router.post("/reminders/run", verifyToken, runReminderCheck);
 router.post("/reminders/test-email", verifyToken, sendReminderTestEmail);
+router.post("/rephrase-text", verifyToken, rephraseText);
 
 module.exports = router;

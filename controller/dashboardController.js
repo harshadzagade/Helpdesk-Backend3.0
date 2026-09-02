@@ -16,6 +16,7 @@ const SubadminActivity = require("../models/subadminActivity");
 const ReminderLog = require("../models/reminderLog");
 const { getReminderSchedulerStatus, runReminderJob, updateReminderSettings } = require("../utils/reminderJob");
 const { emitTicketReminderRefresh } = require("../utils/realtime");
+const { rephraseSentence } = require("../utils/textRephrase");
 const { buildTicketSubject, renderEmailLayout, sendMail } = require("../utils/mailer");
 
 /* ========================= HELPERS ========================= */
@@ -1095,6 +1096,31 @@ exports.sendReminderTestEmail = async (req, res) => {
         return res.status(e.statusCode || 500).json({
             success: false,
             message: e.message || "Failed to send test reminder email",
+        });
+    }
+};
+
+exports.rephraseText = async (req, res) => {
+    try {
+        const text = String(req.body?.text || "");
+        const format = String(req.body?.format || "text").toLowerCase();
+
+        if (!text.trim()) {
+            return res.status(400).json({ success: false, message: "Text is required" });
+        }
+
+        const rephrased = rephraseSentence(text);
+
+        return res.json({
+            success: true,
+            data: {
+                text: format === "html" && rephrased ? `<p>${rephrased}</p>` : rephrased,
+            },
+        });
+    } catch (e) {
+        return res.status(500).json({
+            success: false,
+            message: e.message || "Failed to rephrase text",
         });
     }
 };

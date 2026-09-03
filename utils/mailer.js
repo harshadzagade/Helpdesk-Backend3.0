@@ -67,9 +67,8 @@ const renderEmailLayout = ({
 </head>
 <body style="margin:0;padding:0;background:linear-gradient(180deg,#fff5f5 0%,#fffafb 100%);font-family:Segoe UI,Arial,sans-serif;color:${TEXT};">
   <div style="max-width:680px;margin:0 auto;padding:28px 16px;">
-    <div style="background:${BRAND_COLOR};border-radius:22px 22px 0 0;padding:22px 24px;color:#ffffff;">
-      <div style="font-size:12px;letter-spacing:0.24em;text-transform:uppercase;opacity:0.92;">${escapeHtml(badge)}</div>
-      <div style="font-size:28px;font-weight:800;margin-top:8px;">MET</div>
+    <div style="background:${BRAND_COLOR};border-radius:22px 22px 0 0;padding:22px 24px;color:#ffffff;text-align:center;">
+      <div style="font-size:20px;letter-spacing:0.04em;text-transform:uppercase;opacity:0.98;font-weight:800;">${escapeHtml(badge)}</div>
     </div>
     <div style="background:#ffffff;border:1px solid ${BORDER};border-top:none;border-radius:0 0 22px 22px;padding:28px 24px;box-shadow:0 18px 45px rgba(122,18,24,0.08);">
       <h1 style="margin:0 0 12px;font-size:24px;line-height:1.25;color:${BRAND_DARK};">${escapeHtml(title)}</h1>

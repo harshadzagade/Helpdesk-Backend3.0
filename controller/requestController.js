@@ -40,6 +40,16 @@ const getStaffFullName = (s) =>
   s?.email ||
   s?.id;
 
+const normalizeText = (value) =>
+  String(value || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+
+const isIdCardPrintingRequest = (department, category) =>
+  normalizeText(department?.department) === "erp" &&
+  normalizeText(category) === "id card printing";
+
 const hasDeptAccess = (staff, deptId) => {
   if (!staff || !deptId) return false;
   if (roleLower(staff) === "superadmin") return true;
@@ -218,6 +228,7 @@ exports.createRequest = async (req, res) => {
       return res.status(400).json({ success: false, message: `Invalid departmentId: ${departmentId}` });
     }
     const targetDeptName = targetDept.department;
+    const autoApproveHod1 = isIdCardPrintingRequest(targetDept, departmentCategory);
 
     let behalfUser = null;
     if (behalfBool) {
@@ -278,13 +289,14 @@ exports.createRequest = async (req, res) => {
 
     const newRequest = await sequelize.transaction(async (transaction) => {
       const ticketId = await generateRequestTicketId(transaction);
+      const now = new Date();
 
       return Request.create({
         ticketId,
         staffId: staff.id,
         behalf: behalfBool,
         behalfId: behalfBool ? behalfId : null,
-        status,
+        status: autoApproveHod1 ? "hod1-approved" : status,
         departmentId,
         departmentCategory,
         priority,
@@ -293,6 +305,11 @@ exports.createRequest = async (req, res) => {
         location,
         isRepeated: isRepeatedBool,
         attachments: attachmentPaths,
+        hod1Approval: autoApproveHod1,
+        hod1Comment: autoApproveHod1
+          ? "Auto-approved because this is an ERP ID Card Printing request."
+          : null,
+        hod1ApprovedAt: autoApproveHod1 ? now : null,
       }, { transaction });
     });
 
@@ -302,7 +319,7 @@ exports.createRequest = async (req, res) => {
     /* ===== HOD1 MAIL (requester departments) ===== */
     const requesterDeptIds = deptIdsOf(staff);
 
-    if (requesterDeptIds.length > 0) {
+    if (!autoApproveHod1 && requesterDeptIds.length > 0) {
       const hod1Candidates = await Staff.findAll({
         where: {
           departmentIds: { [Op.overlap]: requesterDeptIds },
@@ -346,6 +363,48 @@ exports.createRequest = async (req, res) => {
       }
     }
 
+    if (autoApproveHod1) {
+      const hod2Candidates = await Staff.findAll({
+        where: {
+          departmentIds: { [Op.contains]: [Number(departmentId)] },
+          role: { [Op.in]: ["admin", "subadmin"] },
+        },
+        attributes: ["id", "email", "firstname", "middlename", "lastname", "departmentIds", "role"],
+      });
+
+      if (hod2Candidates.length > 0) {
+        const staffName = getStaffFullName(staff);
+        const behalfUserNameForMail = behalfUser ? getStaffFullName(behalfUser) : "";
+
+        await Promise.all(
+          hod2Candidates.map((hod) => {
+            const hodName = getStaffFullName(hod);
+            const emailHtml = renderEmailLayout({
+              title: "ERP Assignment Required",
+              intro: `Dear ${hodName}, this ID Card Printing request was auto-approved at HOD1 level and now needs ERP approval and assignment.`,
+              rows: [
+                { label: "Ticket ID", value: ticketId },
+                { label: "Target Department", value: targetDeptName },
+                { label: "Category", value: departmentCategory || "N/A" },
+                { label: "Priority", value: priority || "N/A" },
+                { label: "Status", value: newRequest.status },
+                { label: "Subject", value: subject },
+                { label: "Description", value: description },
+                { label: "Location", value: location || "N/A" },
+                { label: "Raised By", value: `${staffName}${behalfBool ? ` (on behalf of ${behalfUserNameForMail})` : ""}` },
+                { label: "Auto Approval", value: "HOD1 auto-approved for ERP ID Card Printing" },
+              ],
+              outro: "Please log in to MET Helpdesk to approve and assign this request.",
+            });
+
+            return sendEmail(hod.email, ticketSubject, emailHtml).catch((err) => {
+              console.error(`Failed to send HOD2 mail to ${hod.email}`, err);
+            });
+          })
+        );
+      }
+    }
+
     const behalfUserName = behalfUser ? getStaffFullName(behalfUser) : "";
     const requesterEmailHtml = renderEmailLayout({
       title: "Request Created Successfully",
@@ -354,7 +413,8 @@ exports.createRequest = async (req, res) => {
         { label: "Ticket ID", value: ticketId },
         { label: "Target Department", value: targetDeptName },
         { label: "Subject", value: subject },
-        { label: "Status", value: status },
+        { label: "Status", value: newRequest.status },
+        { label: "Auto Approval", value: autoApproveHod1 ? "HOD1 auto-approved for ERP ID Card Printing" : null },
       ],
       outro: "Please use the same ticket ID for future communication so this request stays in one thread.",
     });

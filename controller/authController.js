@@ -5,10 +5,46 @@ const { renderEmailLayout, sendMail } = require('../utils/mailer');
 
 const makeOtp = () => String(Math.floor(100000 + Math.random() * 900000)); // 6-digit OTP
 const AUTH_TOKEN_EXPIRES_IN = '8h';
+const getAppUrl = () => String(process.env.APP_URL || 'https://hello.met.edu').replace(/\/+$/, '');
 
 // Helper to construct full name
 const getFullName = (staff) => {
   return `${staff.firstname} ${staff.middlename || ''} ${staff.lastname}`.trim();
+};
+
+const scrubStaff = (staff) => {
+  if (!staff) return staff;
+  const { password, resetOtpHash, ...safe } = staff.get ? staff.get({ plain: true }) : staff;
+  return safe;
+};
+
+const sendWelcomeMail = async (staff, temporaryPassword) => {
+  const loginUrl = getAppUrl();
+  return sendMail({
+    to: staff.email,
+    subject: 'Welcome to MET Helpdesk',
+    html: renderEmailLayout({
+      title: `Welcome, ${staff.firstname}`,
+      intro: 'Your MET Helpdesk account has been created successfully. Use the temporary password below for your first sign-in.',
+      rows: [
+        { label: 'Portal URL', value: loginUrl },
+        { label: 'Email', value: staff.email },
+        { label: 'Temporary Password', value: temporaryPassword },
+        { label: 'Role', value: staff.role },
+      ],
+      outro: 'On your first sign-in, the portal will ask you to create your own new password.',
+    }),
+    text: `Welcome ${staff.firstname}
+Portal URL: ${loginUrl}
+Email: ${staff.email}
+Temporary Password: ${temporaryPassword}
+Role: ${staff.role}
+
+On your first sign-in, the portal will ask you to create your own new password.
+
+Regards,
+MET Helpdesk`
+  });
 };
 
 // Register Staff (only Superadmin can do this)
@@ -70,7 +106,14 @@ exports.register = async (req, res) => {
       isNew: isNew !== undefined ? Boolean(isNew) : true
     });
 
-    res.status(201).json({ message: 'Staff registered successfully', staff });
+    try {
+      await sendWelcomeMail(staff, password);
+      console.log('Welcome mail sent to:', staff.email);
+    } catch (mailError) {
+      console.error('Welcome mail failed:', mailError.message);
+    }
+
+    res.status(201).json({ message: 'Staff registered successfully', staff: scrubStaff(staff) });
   } catch (error) {
     console.error('Error in register:', error);
     res.status(500).json({ message: 'Error creating staff', error: error.message });
@@ -87,7 +130,7 @@ exports.login = async (req, res) => {
       return res.status(400).json({ message: 'Email and password are required' });
     }
 
-    const staff = await Staff.findOne({ where: { email } });
+    const staff = await Staff.findOne({ where: { email: String(email).trim().toLowerCase() } });
     if (!staff) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -100,7 +143,8 @@ exports.login = async (req, res) => {
     // Check if isNew is true
     if (staff.isNew) {
       return res.status(401).json({ 
-        message: 'Please set your initial password first using the setInitialPassword endpoint.' 
+        code: 'INITIAL_PASSWORD_REQUIRED',
+        message: 'Please create your first-time password before continuing.'
       });
     }
 
@@ -140,7 +184,7 @@ exports.setInitialPassword = async (req, res) => {
     if (newPassword.length < 6) {
       return res.status(400).json({ message: 'New password must be at least 6 characters long' });
     }
-    const staff = await Staff.findOne({ where: { email } });
+    const staff = await Staff.findOne({ where: { email: String(email).trim().toLowerCase() } });
     if (!staff) {
       return res.status(404).json({ message: 'User not found' });
     }
@@ -173,6 +217,7 @@ exports.setInitialPassword = async (req, res) => {
       role: staff.role,
       name: fullName,
       email: staff.email,
+      departmentIds: staff.departmentIds,
       canManageExtensions: Boolean(staff.canManageExtensions),
       canManagePolicies: Boolean(staff.canManagePolicies),
       expiresIn: AUTH_TOKEN_EXPIRES_IN,

@@ -41,6 +41,36 @@ const scrub = (s) => {
 
 const isSuperadmin = (user) => String(user?.role || '').toLowerCase() === 'superadmin';
 const canManageExtensions = (user) => isSuperadmin(user) || Boolean(user?.canManageExtensions);
+const getAppUrl = () => String(process.env.APP_URL || 'https://hello.met.edu').replace(/\/+$/, '');
+
+const sendWelcomeMail = async (staff, temporaryPassword) => {
+  const loginUrl = getAppUrl();
+  return transporter.sendMail({
+    to: staff.email,
+    subject: 'Welcome to MET Helpdesk',
+    html: renderEmailLayout({
+      title: `Welcome, ${staff.firstname}`,
+      intro: 'Your MET Helpdesk account has been created successfully. Use the temporary password below for your first sign-in.',
+      rows: [
+        { label: 'Portal URL', value: loginUrl },
+        { label: 'Email', value: staff.email },
+        { label: 'Temporary Password', value: temporaryPassword },
+        { label: 'Role', value: staff.role },
+      ],
+      outro: 'On your first sign-in, the portal will ask you to create your own new password.',
+    }),
+    text: `Welcome ${staff.firstname}
+Portal URL: ${loginUrl}
+Email: ${staff.email}
+Temporary Password: ${temporaryPassword}
+Role: ${staff.role}
+
+On your first sign-in, the portal will ask you to create your own new password.
+
+Regards,
+MET Helpdesk`
+  });
+};
 
 // ------------------------- mail (PEHLE JAISA: hardcoded) -------------------------
 if (!emailEnabled) {
@@ -153,25 +183,7 @@ exports.createStaff = async (req, res) => {
 
     // ✅ Welcome mail (PEHLE JAISA: always try)
     try {
-      await transporter.sendMail({
-        to: created.email,
-        subject: 'Welcome to MET Helpdesk',
-        html: renderEmailLayout({
-          title: `Welcome, ${created.firstname}`,
-          intro: 'Your MET Helpdesk account has been created successfully.',
-          rows: [
-            { label: 'Email', value: created.email },
-            { label: 'Temporary Password', value: finalPassword },
-            { label: 'Role', value: created.role },
-          ],
-          outro: 'Please log in and change your password after your first sign-in.',
-        }),
-        text: `Welcome ${created.firstname}
-              Email: ${created.email}
-              Temporary Password: ${finalPassword}
-              Please login and change your password.
-              Regards, MET ERP Helpdesk Team`
-      });
+      await sendWelcomeMail(created, finalPassword);
       console.log('✅ Welcome mail sent to:', created.email);
     } catch (mailErr) {
       console.error('❌ Welcome mail failed:', mailErr.message);

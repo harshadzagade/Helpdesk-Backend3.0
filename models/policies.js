@@ -17,6 +17,11 @@ const Policy = sequelize.define('policy', {
        type: Sequelize.ARRAY(Sequelize.STRING),
           allowNull: false,
     },
+    departmentIds: {
+        type: Sequelize.ARRAY(Sequelize.INTEGER),
+        allowNull: false,
+        defaultValue: []
+    },
     attachment:{
         type: Sequelize.STRING,
         allowNull: true

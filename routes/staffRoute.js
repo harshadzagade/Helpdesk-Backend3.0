@@ -20,7 +20,6 @@ const {
 } = require('../controller/staffController');
 
 const { verifyToken, allowRoles } = require('../middleware/authMiddleware');
-const activeDepartment = require('../middleware/activeDepartment');
 
 const router = express.Router();
 
@@ -31,7 +30,7 @@ router.patch('/permissions/:id', verifyToken, allowRoles('superadmin'), updateSt
 router.patch('/:id/contact-extension', verifyToken, updateStaffContactExtension);
 
 // ✅ Admin + Superadmin can change role (admin only for own dept)
-router.patch('/role/:id', verifyToken, activeDepartment, allowRoles('admin', 'superadmin'), updateStaffRoleScoped);
+router.patch('/role/:id', verifyToken, allowRoles('admin', 'superadmin'), updateStaffRoleScoped);
 
 // ====================== ARCHIVE STAFF ======================
 router.get('/archiveStaff', verifyToken, allowRoles('superadmin'), getArchivedStaff);

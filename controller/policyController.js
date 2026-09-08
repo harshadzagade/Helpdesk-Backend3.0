@@ -2,14 +2,58 @@
 const Policy = require('../models/policies');
 const path = require('path');
 const fs = require('fs');
-const { Op } = require('sequelize');
+const { Op, ARRAY, INTEGER } = require('sequelize');
+const sequelize = require('../config/db');
+
+let policyDepartmentColumnReady = false;
+
+const ensurePolicyDepartmentColumn = async () => {
+  if (policyDepartmentColumnReady) return;
+  const queryInterface = sequelize.getQueryInterface();
+  const table = await queryInterface.describeTable('policy');
+  if (!table.departmentIds) {
+    await queryInterface.addColumn('policy', 'departmentIds', {
+      type: ARRAY(INTEGER),
+      allowNull: false,
+      defaultValue: [],
+    });
+  }
+  policyDepartmentColumnReady = true;
+};
 
 const canManagePolicies = (user) =>
   String(user?.role || '').toLowerCase() === 'superadmin' || Boolean(user?.canManagePolicies);
 
 const canViewPolicy = (user, policy) =>
   String(user?.role || '').toLowerCase() === 'superadmin' ||
-  (Array.isArray(policy?.assignRole) && policy.assignRole.includes(String(user?.role || '').toLowerCase()));
+  (
+    Array.isArray(policy?.assignRole) &&
+    policy.assignRole.includes(String(user?.role || '').toLowerCase()) &&
+    (
+      !Array.isArray(policy?.departmentIds) ||
+      policy.departmentIds.length === 0 ||
+      policy.departmentIds.some((id) => (user?.departmentIds || []).map(Number).includes(Number(id)))
+    )
+  );
+
+const parseJsonArray = (value, fieldName) => {
+  if (value === undefined || value === null || value === '') return [];
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (e) {
+      throw new Error(`${fieldName} valid JSON array hona chahiye`);
+    }
+  }
+  throw new Error(`${fieldName} ek array hona chahiye`);
+};
+
+const parseDepartmentIds = (value) =>
+  parseJsonArray(value, 'departmentIds')
+    .map((id) => Number(id))
+    .filter((id) => Number.isInteger(id));
 
 const saveAttachment = async (file) => {
   // uploads/policies ke andar file save karenge
@@ -37,11 +81,12 @@ const saveAttachment = async (file) => {
 // =======================
 exports.createPolicy = async (req, res) => {
   try {
+    await ensurePolicyDepartmentColumn();
     if (!canManagePolicies(req.user)) {
       return res.status(403).json({ message: 'You are not allowed to upload policies' });
     }
 
-    let { policyName, assignRole } = req.body;
+    let { policyName, assignRole, departmentIds } = req.body;
 
     if (!policyName || !assignRole) {
       return res
@@ -49,21 +94,11 @@ exports.createPolicy = async (req, res) => {
         .json({ message: 'policyName aur assignRole required hai' });
     }
 
-    // frontend se JSON string aa sakti hai: '["admin","user"]'
-    if (typeof assignRole === 'string') {
-      try {
-        assignRole = JSON.parse(assignRole);
-      } catch (e) {
-        return res
-          .status(400)
-          .json({ message: 'assignRole valid JSON array hona chahiye' });
-      }
-    }
-
-    if (!Array.isArray(assignRole)) {
-      return res
-        .status(400)
-        .json({ message: 'assignRole ek array hona chahiye' });
+    try {
+      assignRole = parseJsonArray(assignRole, 'assignRole').map((role) => String(role).toLowerCase().trim()).filter(Boolean);
+      departmentIds = parseDepartmentIds(departmentIds);
+    } catch (e) {
+      return res.status(400).json({ message: e.message });
     }
 
     // File handle
@@ -75,6 +110,7 @@ exports.createPolicy = async (req, res) => {
     const policy = await Policy.create({
       policyName,
       assignRole,
+      departmentIds,
       attachment: attachmentPath,
     });
 
@@ -96,6 +132,7 @@ exports.createPolicy = async (req, res) => {
 // GET /api/policies
 exports.getAllPolicies = async (req, res) => {
   try {
+    await ensurePolicyDepartmentColumn();
     // authMiddleware me jo user set kiya hoga
     const userRole = req.user.role; // make sure authMiddleware me role aa raha ho
 
@@ -107,12 +144,22 @@ exports.getAllPolicies = async (req, res) => {
         order: [['id', 'DESC']],
       });
     } else {
-      // baaki sab ko sirf wohi policies jisme unka role assignRole array me hai
+      const userDepartmentIds = Array.isArray(req.user.departmentIds)
+        ? req.user.departmentIds.map(Number)
+        : [];
+
+      // role match + department scope: empty departmentIds means visible to all departments
       policies = await Policy.findAll({
         where: {
-          assignRole: {
-            [Op.contains]: [userRole], // PostgreSQL ARRAY field ke liye
-          },
+          [Op.and]: [
+            { assignRole: { [Op.contains]: [userRole] } },
+            {
+              [Op.or]: [
+                { departmentIds: { [Op.eq]: [] } },
+                { departmentIds: { [Op.overlap]: userDepartmentIds } },
+              ],
+            },
+          ],
         },
         order: [['id', 'DESC']],
       });
@@ -138,6 +185,7 @@ exports.getAllPolicies = async (req, res) => {
 // =======================
 exports.getPolicyById = async (req, res) => {
   try {
+    await ensurePolicyDepartmentColumn();
     const { id } = req.params;
 
     const policy = await Policy.findByPk(id);
@@ -167,12 +215,13 @@ exports.getPolicyById = async (req, res) => {
 // =======================
 exports.updatePolicy = async (req, res) => {
   try {
+    await ensurePolicyDepartmentColumn();
     if (!canManagePolicies(req.user)) {
       return res.status(403).json({ message: 'You are not allowed to update policies' });
     }
 
     const { id } = req.params;
-    let { policyName, assignRole } = req.body;
+    let { policyName, assignRole, departmentIds } = req.body;
 
     const policy = await Policy.findByPk(id);
 
@@ -180,25 +229,20 @@ exports.updatePolicy = async (req, res) => {
       return res.status(404).json({ message: 'Policy not found' });
     }
 
-    // assignRole agar bheja hai to parse + validate
     if (assignRole !== undefined) {
-      if (typeof assignRole === 'string') {
-        try {
-          assignRole = JSON.parse(assignRole);
-        } catch (e) {
-          return res
-            .status(400)
-            .json({ message: 'assignRole valid JSON array hona chahiye' });
-        }
+      try {
+        policy.assignRole = parseJsonArray(assignRole, 'assignRole').map((role) => String(role).toLowerCase().trim()).filter(Boolean);
+      } catch (e) {
+        return res.status(400).json({ message: e.message });
       }
+    }
 
-      if (!Array.isArray(assignRole)) {
-        return res
-          .status(400)
-          .json({ message: 'assignRole ek array hona chahiye' });
+    if (departmentIds !== undefined) {
+      try {
+        policy.departmentIds = parseDepartmentIds(departmentIds);
+      } catch (e) {
+        return res.status(400).json({ message: e.message });
       }
-
-      policy.assignRole = assignRole;
     }
 
     if (policyName !== undefined) {
@@ -237,6 +281,7 @@ exports.updatePolicy = async (req, res) => {
 // =======================
 exports.deletePolicy = async (req, res) => {
   try {
+    await ensurePolicyDepartmentColumn();
     if (!canManagePolicies(req.user)) {
       return res.status(403).json({ message: 'You are not allowed to delete policies' });
     }

@@ -17,6 +17,7 @@ const {
   updateStaffRoleScoped,
   updateStaffPermissions,
   updateStaffContactExtension,
+  resetStaffPassword,
 } = require('../controller/staffController');
 
 const { verifyToken, allowRoles } = require('../middleware/authMiddleware');
@@ -27,6 +28,7 @@ const router = express.Router();
 router.post('/createstaff', verifyToken, allowRoles('superadmin'), createStaff);
 router.get('/', verifyToken, getStaff);
 router.patch('/permissions/:id', verifyToken, allowRoles('superadmin'), updateStaffPermissions);
+router.patch('/:id/reset-password', verifyToken, allowRoles('superadmin'), resetStaffPassword);
 router.patch('/:id/contact-extension', verifyToken, updateStaffContactExtension);
 
 // ✅ Admin + Superadmin can change role (admin only for own dept)

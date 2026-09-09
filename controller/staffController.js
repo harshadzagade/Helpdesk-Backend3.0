@@ -2,6 +2,7 @@
 
 const { Op } = require('sequelize');
 const bcrypt = require('bcryptjs');
+const crypto = require('crypto');
 
 const Staff = require('../models/staff');
 const ArchiveStaff = require('../models/archiveStaff');
@@ -42,6 +43,11 @@ const scrub = (s) => {
 const isSuperadmin = (user) => String(user?.role || '').toLowerCase() === 'superadmin';
 const canManageExtensions = (user) => isSuperadmin(user) || Boolean(user?.canManageExtensions);
 const getAppUrl = () => String(process.env.APP_URL || 'https://hello.met.edu').replace(/\/+$/, '');
+
+const generateTemporaryPassword = () => {
+  const random = crypto.randomBytes(4).toString('hex');
+  return `Met@${random}`;
+};
 
 const sendWelcomeMail = async (staff, temporaryPassword) => {
   const loginUrl = getAppUrl();
@@ -428,6 +434,61 @@ exports.updateStaffContactExtension = async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ message: 'Extension update failed', error: err.message });
+  }
+};
+
+exports.resetStaffPassword = async (req, res) => {
+  try {
+    if (!isSuperadmin(req.user)) {
+      return res.status(403).json({ message: 'Only superadmin can reset staff passwords' });
+    }
+
+    const { id } = req.params;
+    const target = await Staff.findByPk(id);
+    if (!target) return res.status(404).json({ message: 'Staff not found' });
+
+    const temporaryPassword = generateTemporaryPassword();
+    target.password = await bcrypt.hash(temporaryPassword, 10);
+    target.isNew = true;
+    target.resetOtpHash = null;
+    target.resetOtpExpiresAt = null;
+    await target.save();
+
+    try {
+      await sendMail({
+        to: target.email,
+        subject: 'MET Helpdesk Password Reset',
+        html: renderEmailLayout({
+          title: `Password Reset for ${target.firstname}`,
+          intro: 'Your MET Helpdesk password has been reset by the administrator. Use the temporary password below to sign in.',
+          rows: [
+            { label: 'Portal URL', value: getAppUrl() },
+            { label: 'Email', value: target.email },
+            { label: 'Temporary Password', value: temporaryPassword },
+          ],
+          outro: 'After signing in with this temporary password, the portal will ask you to create your own new password.',
+        }),
+        text: `Your MET Helpdesk password has been reset.
+Portal URL: ${getAppUrl()}
+Email: ${target.email}
+Temporary Password: ${temporaryPassword}
+
+After signing in with this temporary password, the portal will ask you to create your own new password.
+
+Regards,
+MET Helpdesk`,
+      });
+    } catch (mailErr) {
+      console.error('Password reset mail failed:', mailErr.message);
+    }
+
+    return res.json({
+      message: 'Password reset successfully. User must set a new password on next login.',
+      temporaryPassword,
+      data: scrub(target),
+    });
+  } catch (err) {
+    return res.status(500).json({ message: 'Password reset failed', error: err.message });
   }
 };
 

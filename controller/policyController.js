@@ -6,6 +6,7 @@ const { Op, ARRAY, INTEGER } = require('sequelize');
 const sequelize = require('../config/db');
 
 let policyDepartmentColumnReady = false;
+const DEFAULT_POLICY_ROLES = ['admin', 'subadmin', 'engineer', 'user'];
 
 const ensurePolicyDepartmentColumn = async () => {
   if (policyDepartmentColumnReady) return;
@@ -24,17 +25,20 @@ const ensurePolicyDepartmentColumn = async () => {
 const canManagePolicies = (user) =>
   String(user?.role || '').toLowerCase() === 'superadmin' || Boolean(user?.canManagePolicies);
 
-const canViewPolicy = (user, policy) =>
-  String(user?.role || '').toLowerCase() === 'superadmin' ||
-  (
-    Array.isArray(policy?.assignRole) &&
-    policy.assignRole.includes(String(user?.role || '').toLowerCase()) &&
-    (
-      !Array.isArray(policy?.departmentIds) ||
-      policy.departmentIds.length === 0 ||
-      policy.departmentIds.some((id) => (user?.departmentIds || []).map(Number).includes(Number(id)))
-    )
-  );
+const policyAppliesToRole = (policy, role) =>
+  !Array.isArray(policy?.assignRole) ||
+  policy.assignRole.length === 0 ||
+  policy.assignRole.includes(role);
+
+const policyAppliesToDepartment = (user, policy) =>
+  !Array.isArray(policy?.departmentIds) ||
+  policy.departmentIds.length === 0 ||
+  policy.departmentIds.some((id) => (user?.departmentIds || []).map(Number).includes(Number(id)));
+
+const canViewPolicy = (user, policy) => {
+  const role = String(user?.role || '').toLowerCase();
+  return role === 'superadmin' || (policyAppliesToRole(policy, role) && policyAppliesToDepartment(user, policy));
+};
 
 const parseJsonArray = (value, fieldName) => {
   if (value === undefined || value === null || value === '') return [];
@@ -95,14 +99,17 @@ exports.createPolicy = async (req, res) => {
 
     let { policyName, assignRole, departmentIds } = req.body;
 
-    if (!policyName || !assignRole) {
+    if (!policyName) {
       return res
         .status(400)
-        .json({ message: 'policyName aur assignRole required hai' });
+        .json({ message: 'policyName required hai' });
     }
 
     try {
-      assignRole = parseJsonArray(assignRole, 'assignRole').map((role) => String(role).toLowerCase().trim()).filter(Boolean);
+      assignRole =
+        assignRole === undefined || assignRole === null || assignRole === ''
+          ? DEFAULT_POLICY_ROLES
+          : parseJsonArray(assignRole, 'assignRole').map((role) => String(role).toLowerCase().trim()).filter(Boolean);
       departmentIds = parseDepartmentIds(departmentIds);
     } catch (e) {
       return res.status(400).json({ message: e.message });
@@ -158,11 +165,16 @@ exports.getAllPolicies = async (req, res) => {
         ? req.user.departmentIds.map(Number)
         : [];
 
-      // role match + department scope: empty departmentIds means visible to all departments
+      // role match + department scope: empty assignRole/departmentIds means visible to everyone in scope
       policies = await Policy.findAll({
         where: {
           [Op.and]: [
-            { assignRole: { [Op.contains]: [userRole] } },
+            {
+              [Op.or]: [
+                { assignRole: { [Op.eq]: [] } },
+                { assignRole: { [Op.contains]: [userRole] } },
+              ],
+            },
             {
               [Op.or]: [
                 { departmentIds: { [Op.eq]: [] } },

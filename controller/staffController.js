@@ -1,7 +1,7 @@
 // controllers/staffController.js
 
 const { Op } = require('sequelize');
-const bcrypt = require('bcryptjs');
+const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 
 const Staff = require('../models/staff');
@@ -45,8 +45,8 @@ const canManageExtensions = (user) => isSuperadmin(user) || Boolean(user?.canMan
 const getAppUrl = () => String(process.env.APP_URL || 'https://hello.met.edu').replace(/\/+$/, '');
 
 const generateTemporaryPassword = () => {
-  const random = crypto.randomBytes(4).toString('hex');
-  return `Met@${random}`;
+  const random = crypto.randomInt(100000, 1000000);
+  return `Met${random}`;
 };
 
 const sendWelcomeMail = async (staff, temporaryPassword) => {
@@ -454,8 +454,10 @@ exports.resetStaffPassword = async (req, res) => {
     target.resetOtpExpiresAt = null;
     await target.save();
 
+    let mailSent = false;
+    let mailWarning = null;
     try {
-      await sendMail({
+      const mailResult = await sendMail({
         to: target.email,
         subject: 'MET Helpdesk Password Reset',
         html: renderEmailLayout({
@@ -478,13 +480,20 @@ After signing in with this temporary password, the portal will ask you to create
 Regards,
 MET Helpdesk`,
       });
+      mailSent = !mailResult?.skipped;
+      if (mailResult?.skipped) {
+        mailWarning = 'Email delivery is disabled.';
+      }
     } catch (mailErr) {
       console.error('Password reset mail failed:', mailErr.message);
+      mailWarning = mailErr.message || 'Password reset email failed.';
     }
 
     return res.json({
       message: 'Password reset successfully. User must set a new password on next login.',
       temporaryPassword,
+      mailSent,
+      mailWarning,
       data: scrub(target),
     });
   } catch (err) {

@@ -31,6 +31,8 @@ const isEngineerLike = (staff) => {
   return r === "engineer" || r === "engineers";
 };
 
+const isAssignableSupportStaff = (staff) => isEngineerLike(staff) || roleLower(staff) === "subadmin";
+
 const normalizeBool = (val) => val === true || val === "true" || val === 1 || val === "1";
 
 const getStaffFullName = (s) =>
@@ -232,13 +234,6 @@ exports.createRequest = async (req, res) => {
 
     let behalfUser = null;
     if (behalfBool) {
-      if (!isAdminLike(actor)) {
-        return res.status(403).json({
-          success: false,
-          message: "Only admin, subadmin, or superadmin can create requests on behalf of another user.",
-        });
-      }
-
       if (!behalfId) {
         return res.status(400).json({ success: false, message: "behalf is true but behalfId missing" });
       }
@@ -904,7 +899,7 @@ exports.hod2ApproveRequest = async (req, res) => {
       return res.status(400).json({ success: false, message: "HOD2 already approved this request." });
     }
     if (!assignStaffId) {
-      return res.status(400).json({ success: false, message: "assignStaffId is required (engineer to assign)." });
+      return res.status(400).json({ success: false, message: "assignStaffId is required (engineer/subadmin to assign)." });
     }
 
     // ✅ active dept must match target dept
@@ -930,16 +925,16 @@ exports.hod2ApproveRequest = async (req, res) => {
     }
 
     const assignee = await Staff.findByPk(assignStaffId);
-    if (!assignee) return res.status(404).json({ success: false, message: `Engineer staff not found for id: ${assignStaffId}` });
+    if (!assignee) return res.status(404).json({ success: false, message: `Staff not found for id: ${assignStaffId}` });
 
-    if (!isEngineerLike(assignee)) {
-      return res.status(400).json({ success: false, message: "assignStaffId must be an engineer." });
+    if (!isAssignableSupportStaff(assignee)) {
+      return res.status(400).json({ success: false, message: "assignStaffId must be an engineer or subadmin." });
     }
 
     if (!hasDeptAccess(assignee, request.departmentId)) {
       return res.status(400).json({
         success: false,
-        message: "Engineer must belong to the same target department where request is raised.",
+        message: "Assigned staff must belong to the same target department where request is raised.",
       });
     }
 
@@ -978,7 +973,7 @@ exports.hod2ApproveRequest = async (req, res) => {
 
       const htmlEngineer = renderEmailLayout({
         title: "Request Assigned to You",
-        intro: `Dear ${assigneeName}, this request was approved by HOD2 (${hod2Name}) and assigned to you.`,
+      intro: `Dear ${assigneeName}, this request was approved by HOD2 (${hod2Name}) and assigned to you.`,
         rows: [
           { label: "Ticket ID", value: request.ticketId },
           { label: "Department", value: targetDept?.department || "N/A" },
@@ -1010,7 +1005,7 @@ exports.hod2ApproveRequest = async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      message: "HOD2 approval done and request assigned to engineer.",
+      message: "HOD2 approval done and request assigned to staff.",
       data: request,
     });
   } catch (error) {

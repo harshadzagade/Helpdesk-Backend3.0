@@ -88,6 +88,20 @@ const ageInDays = (date, now = new Date()) => {
   return Math.floor(diff / DAY_MS);
 };
 
+const cleanHtmlText = (html) =>
+  String(html || '')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+
 const getReachedThresholds = (startDate, thresholds, now) => {
   const daysOld = ageInDays(startDate, now);
   return thresholds.filter((days) => daysOld >= days);
@@ -189,6 +203,7 @@ const sendReminder = async ({ ticketType, ticket, reminderType, recipient, thres
           { label: 'Ticket Type', value: ticketType },
           { label: 'Subject', value: ticket.subject || 'N/A' },
           { label: 'Status', value: ticket.status || 'N/A' },
+          { label: 'Description', value: cleanHtmlText(ticket.description) || 'N/A' },
           { label: 'Reminder Age', value: `${thresholdDays} day${thresholdDays > 1 ? 's' : ''}` },
           ...rows,
         ],
@@ -238,7 +253,8 @@ const sendToRecipients = async (recipients, payload) => {
   });
 
   for (const recipient of uniqueRecipients) {
-    for (const thresholdDays of payload.thresholds) {
+    const thresholdDays = Math.max(...payload.thresholds);
+    if (Number.isFinite(thresholdDays)) {
       results.push(await sendReminder({ ...payload, recipient, thresholdDays }));
     }
   }

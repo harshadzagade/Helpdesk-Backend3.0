@@ -31,10 +31,10 @@ exports.getSubadminActivities = async (req, res) => {
 
     // ✅ Sirf admin / superadmin hi dekh sakte
     const role = String(currentStaff.role || "").toLowerCase();
-    if (role !== "admin" && role !== "superadmin") {
+    if (role !== "admin" && role !== "superadmin" && role !== "subadmin") {
       return res.status(403).json({
         success: false,
-        message: "Only admin/superadmin can view subadmin activities.",
+        message: "Only admin, subadmin, or superadmin can view subadmin activities.",
       });
     }
 
@@ -58,6 +58,10 @@ exports.getSubadminActivities = async (req, res) => {
     if (subadminId) {
       const sid = parseInt(subadminId, 10);
       if (!Number.isNaN(sid)) where.subadminId = sid;
+    }
+
+    if (role === "subadmin") {
+      where.subadminId = currentStaff.id;
     }
 
     if (actionTaken) where.actionTaken = actionTaken;

@@ -185,13 +185,6 @@ exports.createComplaint = async (req, res) => {
 
     let behalfUser = null;
     if (behalfBool) {
-      if (!isAdminLike(actor)) {
-        return res.status(403).json({
-          success: false,
-          message: 'Only admin, subadmin, or superadmin can create complaints on behalf of another user.',
-        });
-      }
-
       if (!behalfId) {
         return res.status(400).json({
           success: false,

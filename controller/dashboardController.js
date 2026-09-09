@@ -535,13 +535,13 @@ exports.adminSummary = async (req, res) => {
         .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
         .slice(0, 10);
   
-      /* ===================== ENGINEER WORKLOAD (Active Dept) ===================== */
+      /* ===================== SUPPORT STAFF WORKLOAD (Active Dept) ===================== */
       const engineers = await Staff.findAll({
         where: {
           departmentIds: { [Op.contains]: [activeDeptId] },
-          role: { [Op.in]: ["engineer", "engineers"] },
+          role: { [Op.in]: ["engineer", "engineers", "subadmin"] },
         },
-        attributes: ["id", "firstname", "middlename", "lastname", "email"],
+        attributes: ["id", "firstname", "middlename", "lastname", "email", "role"],
       });
   
       const engineerLoad = await Promise.all(

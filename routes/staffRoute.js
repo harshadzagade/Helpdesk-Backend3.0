@@ -36,6 +36,7 @@ router.patch('/role/:id', verifyToken, allowRoles('admin', 'superadmin'), update
 
 // ====================== ARCHIVE STAFF ======================
 router.get('/archiveStaff', verifyToken, allowRoles('superadmin'), getArchivedStaff);
+router.get('/archived-staff', verifyToken, allowRoles('superadmin'), getArchivedStaff);
 router.get('/archived/:id', verifyToken, allowRoles('superadmin'), getArchivedStaffById);
 router.post('/recover/:id', verifyToken, allowRoles('superadmin'), recoverStaff);
 router.delete('/permanent/:id', verifyToken, allowRoles('superadmin'), permanentDeleteStaff);

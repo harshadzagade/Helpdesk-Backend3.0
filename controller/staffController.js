@@ -712,6 +712,14 @@ exports.recoverStaff = async (req, res) => {
       }
     }
 
+    if (roleLower === 'subadmin') {
+      try {
+        await validateSubadminDepartments(deptIds);
+      } catch (err) {
+        return res.status(400).json({ message: err.message });
+      }
+    }
+
     const recovered = await Staff.create({
       firstname: archivedItem.firstname,
       middlename: archivedItem.middlename,

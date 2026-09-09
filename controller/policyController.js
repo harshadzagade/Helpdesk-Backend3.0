@@ -55,6 +55,13 @@ const parseDepartmentIds = (value) =>
     .map((id) => Number(id))
     .filter((id) => Number.isInteger(id));
 
+const isPdfUpload = (file) => {
+  if (!file) return true;
+  const fileName = String(file.name || '').toLowerCase();
+  const mimeType = String(file.mimetype || '').toLowerCase();
+  return mimeType === 'application/pdf' || fileName.endsWith('.pdf');
+};
+
 const saveAttachment = async (file) => {
   // uploads/policies ke andar file save karenge
   const uploadDir = path.join(__dirname, '..', 'uploads', 'policies');
@@ -104,6 +111,9 @@ exports.createPolicy = async (req, res) => {
     // File handle
     let attachmentPath = null;
     if (req.files && req.files.attachment) {
+      if (!isPdfUpload(req.files.attachment)) {
+        return res.status(400).json({ message: 'Only PDF files are allowed for policies' });
+      }
       attachmentPath = await saveAttachment(req.files.attachment);
     }
 
@@ -251,6 +261,9 @@ exports.updatePolicy = async (req, res) => {
 
     // agar new file aaye to replace
     if (req.files && req.files.attachment) {
+      if (!isPdfUpload(req.files.attachment)) {
+        return res.status(400).json({ message: 'Only PDF files are allowed for policies' });
+      }
       const attachmentPath = await saveAttachment(req.files.attachment);
 
       // (optional) purane file ko delete kar sakte ho:

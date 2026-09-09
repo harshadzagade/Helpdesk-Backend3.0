@@ -95,25 +95,32 @@ transporter.verify((err) => {
 });
 
 // ------------------------- validations -------------------------
-/** One departmentId -> only one admin */
-const validateAdminDepartments = async (proposedDeptIds, excludeId = null) => {
+/** One departmentId -> only one staff member for key HOD roles */
+const validateRoleDepartments = async (role, proposedDeptIds, excludeId = null) => {
   if (!proposedDeptIds || proposedDeptIds.length === 0) return true;
 
   for (const deptId of proposedDeptIds) {
-    const existingAdmin = await Staff.findOne({
+    const existingStaff = await Staff.findOne({
       where: {
-        role: 'admin',
+        role,
         departmentIds: { [Op.contains]: [deptId] },
         ...(excludeId && { id: { [Op.ne]: excludeId } })
       }
     });
 
-    if (existingAdmin) {
-      throw new Error(`DepartmentId "${deptId}" already assigned to another admin`);
+    if (existingStaff) {
+      const roleLabel = role === 'subadmin' ? 'subadmin' : 'admin';
+      throw new Error(`DepartmentId "${deptId}" already assigned to another ${roleLabel}`);
     }
   }
   return true;
 };
+
+const validateAdminDepartments = (proposedDeptIds, excludeId = null) =>
+  validateRoleDepartments('admin', proposedDeptIds, excludeId);
+
+const validateSubadminDepartments = (proposedDeptIds, excludeId = null) =>
+  validateRoleDepartments('subadmin', proposedDeptIds, excludeId);
 
 // ============================================================
 // 1) CREATE (Superadmin only)
@@ -163,6 +170,14 @@ exports.createStaff = async (req, res) => {
     if (roleLower === 'admin') {
       try {
         await validateAdminDepartments(deptIds);
+      } catch (err) {
+        return res.status(400).json({ message: err.message });
+      }
+    }
+
+    if (roleLower === 'subadmin') {
+      try {
+        await validateSubadminDepartments(deptIds);
       } catch (err) {
         return res.status(400).json({ message: err.message });
       }
@@ -300,6 +315,14 @@ exports.updateStaff = async (req, res) => {
     if (proposedRole === 'admin') {
       try {
         await validateAdminDepartments(proposedDeptIds, id);
+      } catch (err) {
+        return res.status(400).json({ message: err.message });
+      }
+    }
+
+    if (proposedRole === 'subadmin') {
+      try {
+        await validateSubadminDepartments(proposedDeptIds, id);
       } catch (err) {
         return res.status(400).json({ message: err.message });
       }
@@ -528,6 +551,16 @@ exports.updateStaffRoleScoped = async (req, res) => {
 
     const actorRole = String(actor.role).toLowerCase();
     const targetRole = String(target.role).toLowerCase();
+    const targetDeptIds = normalizeIntArray(target.departmentIds);
+
+    const validateUniqueHodRole = async () => {
+      if (newRole === 'admin') {
+        await validateAdminDepartments(targetDeptIds, id);
+      }
+      if (newRole === 'subadmin') {
+        await validateSubadminDepartments(targetDeptIds, id);
+      }
+    };
 
     // superadmin: allow (with last superadmin protection)
     if (actorRole === 'superadmin') {
@@ -536,6 +569,11 @@ exports.updateStaffRoleScoped = async (req, res) => {
         if (superCount <= 1) {
           return res.status(403).json({ message: 'Cannot downgrade the last superadmin' });
         }
+      }
+      try {
+        await validateUniqueHodRole();
+      } catch (err) {
+        return res.status(400).json({ message: err.message });
       }
       target.role = newRole;
       await target.save();
@@ -560,7 +598,6 @@ exports.updateStaffRoleScoped = async (req, res) => {
 
     // dept scope check (needs req.user.departmentIds)
     const actorDeptIds = normalizeIntArray(actor.departmentIds);
-    const targetDeptIds = normalizeIntArray(target.departmentIds);
 
     if (!actorDeptIds.length) {
       return res.status(403).json({ message: 'Admin has no department access assigned' });
@@ -569,6 +606,12 @@ exports.updateStaffRoleScoped = async (req, res) => {
     const sameDept = targetDeptIds.some(d => actorDeptIds.includes(d));
     if (!sameDept) {
       return res.status(403).json({ message: 'You can change role only for your department staff' });
+    }
+
+    try {
+      await validateUniqueHodRole();
+    } catch (err) {
+      return res.status(400).json({ message: err.message });
     }
 
     target.role = newRole;

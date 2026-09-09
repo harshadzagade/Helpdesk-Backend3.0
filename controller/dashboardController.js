@@ -449,6 +449,19 @@ exports.adminSummary = async (req, res) => {
         slaBreaches(whereC, whereR),
         recentTickets(whereC, whereR, 10),
       ]);
+
+      const [pendingList, closedList] = await Promise.all([
+        recentTickets(
+          { ...whereC, status: { [Op.iLike]: "pending" } },
+          { ...whereR, status: { [Op.iLike]: "pending" } },
+          30
+        ),
+        recentTickets(
+          { ...whereC, status: { [Op.iLike]: "closed" } },
+          { ...whereR, status: { [Op.iLike]: "closed" } },
+          30
+        ),
+      ]);
   
       /* ===================== ✅ SINGLE APPROVAL PENDING ===================== */
       const staffDeptIds = deptIdsOf(staff).map(Number);
@@ -590,6 +603,8 @@ exports.adminSummary = async (req, res) => {
           // ✅ single approval
           approvalPendingCount,
           approvalPendingList,
+          pendingList,
+          closedList,
   
           // unassigned
           unassigned: unassignedComplaints + unassignedRequests,

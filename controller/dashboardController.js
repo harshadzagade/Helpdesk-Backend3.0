@@ -253,6 +253,26 @@ async function recentTickets(whereBaseC = {}, whereBaseR = {}, limit = 10) {
     return mix.slice(0, limit);
 }
 
+async function activeTickets(whereBaseC = {}, whereBaseR = {}, limit = 200) {
+    const activeStatusWhere = {
+        status: {
+            [Op.or]: [
+                { [Op.iLike]: "pending" },
+                { [Op.iLike]: "in progress" },
+                { [Op.iLike]: "in-progress" },
+                { [Op.iLike]: "hod%" },
+                { [Op.iLike]: "%approval%" },
+            ],
+        },
+    };
+
+    return recentTickets(
+        { ...whereBaseC, ...activeStatusWhere },
+        { ...whereBaseR, ...activeStatusWhere },
+        limit
+    );
+}
+
 const reminderTicketPayload = (row, type, reason) => ({
     id: row.id,
     ticketId: row.ticketId,
@@ -447,7 +467,7 @@ exports.adminSummary = async (req, res) => {
         countsByStatus(whereC, whereR),
         prioritySplit(whereC, whereR),
         slaBreaches(whereC, whereR),
-        recentTickets(whereC, whereR, 10),
+        activeTickets(whereC, whereR, 200),
       ]);
 
       const [pendingList, closedList] = await Promise.all([
